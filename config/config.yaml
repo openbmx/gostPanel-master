@@ -1,0 +1,20 @@
+server:
+  port: ":39100"
+  mode: "release"  # debug, release
+
+database:
+  type: "sqlite"
+  path: "./gost-panel.db"
+
+jwt:
+  secret: "zxcvbnm123456"
+  expire: 7200  # 2小时 (秒)
+
+log:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json, console
+  output: "./logs/app.log"
+
+admin:
+  username: "admin"
+  password: "admin123"  # 首次启动后建议修改密码

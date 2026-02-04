@@ -1,0 +1,54 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+go.work
+
+# Database & Data
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Logs
+*.log
+logs/
+
+# Temp
+tmp/
+temp/
+*.tmp
+
+# Build
+dist/
+build/
+internal/router/dist/
+main
+gost-panel
+
+# Frontend (Web)
+web/node_modules/
+web/dist/
+web/.cache/
+web/*.log
+
+# Environment
+.env
+.env.local
+third_party
+.claude

@@ -269,7 +269,7 @@ func (s *TunnelService) Start(id uint, userID uint, username string, ip, userAge
 		}
 		relaySvc.Metadata["enableStats"] = true
 		relaySvc.Metadata["observer.period"] = "5s"
-		relaySvc.Metadata["observer.resetTraffic"] = false
+		relaySvc.Metadata["observer.resetTraffic"] = true
 	}
 
 	if err = exitClient.CreateService(relaySvc); err != nil {

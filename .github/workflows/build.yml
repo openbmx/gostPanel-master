@@ -1,0 +1,75 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        check-latest: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Build Frontend
+      run: |
+        cd web
+        npm ci
+        npm run build
+        cd ..
+
+    - name: Build Backend (Linux amd64)
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o gost-panel-linux-amd64 cmd/server/main.go
+
+    - name: Build Backend (Linux arm64)
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o gost-panel-linux-arm64 cmd/server/main.go
+    
+    # 如果你也想编译 Windows 版本，可以取消注释以下行
+    # - name: Build Backend (Windows amd64)
+    #   run: |
+    #     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o gost-panel-windows-amd64.exe cmd/server/main.go
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: gost-panel-binaries
+        path: |
+          gost-panel-linux-amd64
+          gost-panel-linux-arm64
+          # gost-panel-windows-amd64.exe
+
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    # Docker 构建通常需要推送可以推送到 ghcr.io 或 DockerHub
+    # 这里我们只演示构建过程，确保 Dockerfile 是没问题的
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile
+        push: false # 设置为 true 需要配置 login
+        tags: gost-panel:latest

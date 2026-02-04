@@ -166,10 +166,10 @@ func (r *RuleRepository) StopByNodeID(nodeID uint) error {
 // UpdateStats 更新流量统计
 func (r *RuleRepository) UpdateStats(id uint, inputBytes, outputBytes, totalRequests int64) error {
 	return r.UpdateFields(&model.GostRule{}, id, map[string]interface{}{
-		"input_bytes":    inputBytes,
-		"output_bytes":   outputBytes,
-		"total_bytes":    inputBytes + outputBytes,
-		"total_requests": totalRequests,
+		"input_bytes":    gorm.Expr("input_bytes + ?", inputBytes),
+		"output_bytes":   gorm.Expr("output_bytes + ?", outputBytes),
+		"total_bytes":    gorm.Expr("total_bytes + ?", inputBytes+outputBytes),
+		"total_requests": gorm.Expr("total_requests + ?", totalRequests),
 	})
 }
 

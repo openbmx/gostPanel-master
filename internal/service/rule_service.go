@@ -425,7 +425,7 @@ func (s *RuleService) setupRuleObserver(client *gost.Client, rule *model.GostRul
 		}
 		svc.Metadata["enableStats"] = true
 		svc.Metadata["observer.period"] = "5s"
-		svc.Metadata["observer.resetTraffic"] = false
+		svc.Metadata["observer.resetTraffic"] = true
 	}
 	return nil
 }

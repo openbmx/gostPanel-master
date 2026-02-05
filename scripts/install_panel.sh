@@ -161,7 +161,7 @@ create_service() {
     cat > /etc/systemd/system/gost-panel.service <<EOF
 [Unit]
 Description=Gost Panel Service
-Documentation=https://github.com/apicoder-peng/gostPanel
+Documentation=https://github.com/openbmx/gostPanel-master
 After=network-online.target
 Wants=network-online.target
 

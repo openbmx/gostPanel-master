@@ -425,7 +425,7 @@ func (s *RuleService) setupRuleObserver(client *gost.Client, rule *model.GostRul
 		}
 		svc.Metadata["enableStats"] = true
 		svc.Metadata["observer.period"] = "5s"
-		svc.Metadata["observer.resetTraffic"] = true
+		svc.Metadata["observer.resetTraffic"] = false // 使用累计模式，避免流量丢失
 	}
 	return nil
 }

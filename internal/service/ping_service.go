@@ -87,8 +87,18 @@ func (s *NodeHealthService) checkNodes() {
 			// 状态变更处理
 			if status != n.Status {
 				logger.Infof("节点 %s 状态变更: %s -> %s", n.Name, n.Status, status)
+				oldStatus := n.Status
 				if err = s.nodeRepo.UpdateStatus(n.ID, status); err != nil {
 					logger.Errorf("更新节点 %s 状态失败: %v", n.Name, err)
+				}
+
+				// 节点从离线恢复到在线，尝试重启之前运行的规则和隧道
+				if oldStatus == model.NodeStatusOffline && status == model.NodeStatusOnline {
+					logger.Infof("节点 %s 恢复在线，准备重启关联的规则和隧道", n.Name)
+					// 注意：这里只更新状态为stopped，实际重启需要通过API手动触发
+					// 或者可以在这里调用RuleService.Start()和TunnelService.Start()自动重启
+					// 但这需要注入这些服务，暂时只记录日志提示
+					logger.Warnf("节点 %s 已恢复，请手动重启相关规则和隧道，或等待后续版本支持自动重启", n.Name)
 				}
 			}
 

@@ -183,7 +183,7 @@ func initSystemConfig(db *gorm.DB) error {
 		sysConfig := &model.SystemConfig{
 			SiteTitle:            "Gost Panel",
 			LogoURL:              "https://gost.run/images/gost.png",
-			Copyright:            "https://github.com/code-gopher/gostPanel",
+			Copyright:            "https://github.com/openbmx/gostPanel-master",
 			LogRetentionDays:     7,
 			LogLevel:             "info",
 			AutoBackup:           false,

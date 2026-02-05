@@ -30,6 +30,10 @@ type GostNode struct {
 	InputBytes  int64 `gorm:"default:0" json:"input_bytes"`
 	OutputBytes int64 `gorm:"default:0" json:"output_bytes"`
 
+	// Gost上报的累计值（用于计算增量）
+	LastReportedInputBytes  int64 `gorm:"default:0" json:"-"` // 上次上报的入站累计值
+	LastReportedOutputBytes int64 `gorm:"default:0" json:"-"` // 上次上报的出站累计值
+
 	LastCheckAt *time.Time     `json:"last_check_at"`           // 最后检查时间
 	Remark      string         `gorm:"type:text" json:"remark"` // 备注
 	CreatedAt   time.Time      `json:"created_at"`

@@ -84,8 +84,8 @@
         <!-- 底部版权 (Footer) -->
         <div class="footer">
           <span>Copyright © 2023-2026 Gost Panel · </span>
-          <a href="https://github.com/code-gopher/gostPanel" target="_blank">
-            https://github.com/code-gopher/gostPanel
+          <a href="https://github.com/openbmx/gostPanel-master" target="_blank">
+            https://github.com/openbmx/gostPanel-master
           </a>
         </div>
       </div>

@@ -50,6 +50,11 @@ type GostRule struct {
 	TotalBytes    int64 `gorm:"default:0" json:"total_bytes"`    // 总流量 (Input + Output)
 	TotalRequests int64 `gorm:"default:0" json:"total_requests"` // 总请求数
 
+	// Gost上报的累计值（用于计算增量）
+	LastReportedInputBytes  int64 `gorm:"default:0" json:"-"` // 上次上报的入站累计值
+	LastReportedOutputBytes int64 `gorm:"default:0" json:"-"` // 上次上报的出站累计值
+	LastReportedTotalConns  int64 `gorm:"default:0" json:"-"` // 上次上报的总连接数
+
 	Remark    string         `gorm:"type:text" json:"remark"` // 备注
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

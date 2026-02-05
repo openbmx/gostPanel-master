@@ -163,14 +163,56 @@ func (r *RuleRepository) StopByNodeID(nodeID uint) error {
 		Update("status", model.RuleStatusStopped).Error
 }
 
-// UpdateStats 更新流量统计
-func (r *RuleRepository) UpdateStats(id uint, inputBytes, outputBytes, totalRequests int64) error {
-	return r.UpdateFields(&model.GostRule{}, id, map[string]interface{}{
-		"input_bytes":    gorm.Expr("input_bytes + ?", inputBytes),
-		"output_bytes":   gorm.Expr("output_bytes + ?", outputBytes),
-		"total_bytes":    gorm.Expr("total_bytes + ?", inputBytes+outputBytes),
-		"total_requests": gorm.Expr("total_requests + ?", totalRequests),
-	})
+// UpdateStats 更新流量统计（计算增量）
+// Gost observer 上报的是累计总量，需要计算增量后再累加
+func (r *RuleRepository) UpdateStats(id uint, reportedInputBytes, reportedOutputBytes, reportedTotalConns int64) error {
+	// 先查询当前值
+	var rule model.GostRule
+	if err := r.DB.Select("id", "last_reported_input_bytes", "last_reported_output_bytes", "last_reported_total_conns").
+		Where("id = ?", id).First(&rule).Error; err != nil {
+		return err
+	}
+
+	// 计算增量（如果是第一次上报或重启后，上报值可能小于上次值，此时重置为上报值）
+	var inputDelta, outputDelta, connsDelta int64
+	if reportedInputBytes >= rule.LastReportedInputBytes {
+		inputDelta = reportedInputBytes - rule.LastReportedInputBytes
+	} else {
+		// Gost 重启后计数器重置，直接使用新值作为增量
+		inputDelta = reportedInputBytes
+	}
+
+	if reportedOutputBytes >= rule.LastReportedOutputBytes {
+		outputDelta = reportedOutputBytes - rule.LastReportedOutputBytes
+	} else {
+		outputDelta = reportedOutputBytes
+	}
+
+	if reportedTotalConns >= rule.LastReportedTotalConns {
+		connsDelta = reportedTotalConns - rule.LastReportedTotalConns
+	} else {
+		connsDelta = reportedTotalConns
+	}
+
+	// 只有增量大于0时才更新（避免无效更新）
+	if inputDelta > 0 || outputDelta > 0 || connsDelta > 0 {
+		return r.DB.Model(&model.GostRule{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"input_bytes":                 gorm.Expr("input_bytes + ?", inputDelta),
+			"output_bytes":                gorm.Expr("output_bytes + ?", outputDelta),
+			"total_bytes":                 gorm.Expr("total_bytes + ?", inputDelta+outputDelta),
+			"total_requests":              gorm.Expr("total_requests + ?", connsDelta),
+			"last_reported_input_bytes":   reportedInputBytes,
+			"last_reported_output_bytes":  reportedOutputBytes,
+			"last_reported_total_conns":   reportedTotalConns,
+		}).Error
+	}
+
+	// 没有增量，只更新上次上报值
+	return r.DB.Model(&model.GostRule{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"last_reported_input_bytes":  reportedInputBytes,
+		"last_reported_output_bytes": reportedOutputBytes,
+		"last_reported_total_conns":  reportedTotalConns,
+	}).Error
 }
 
 // StopByTunnelIDs 停止指定隧道列表关联的所有规则

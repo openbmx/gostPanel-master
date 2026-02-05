@@ -30,6 +30,15 @@ type GostTunnel struct {
 	ServiceID string `gorm:"size:100" json:"service_id"` // 出口节点 Relay 服务 ID
 	ChainID   string `gorm:"size:100" json:"chain_id"`   // 入口节点 Chain ID
 
+	// 流量统计 (由观察器更新)
+	InputBytes  int64 `gorm:"default:0" json:"input_bytes"`  // 入站总流量 (bytes)
+	OutputBytes int64 `gorm:"default:0" json:"output_bytes"` // 出站总流量 (bytes)
+	TotalBytes  int64 `gorm:"default:0" json:"total_bytes"`  // 总流量 (Input + Output)
+
+	// Gost上报的累计值（用于计算增量）
+	LastReportedInputBytes  int64 `gorm:"default:0" json:"-"` // 上次上报的入站累计值
+	LastReportedOutputBytes int64 `gorm:"default:0" json:"-"` // 上次上报的出站累计值
+
 	Remark    string         `gorm:"type:text" json:"remark"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

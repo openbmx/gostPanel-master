@@ -7,7 +7,6 @@ import (
 
 	"gost-panel/internal/model"
 	"gost-panel/internal/repository"
-	"gost-panel/internal/utils"
 	"gost-panel/pkg/logger"
 
 	"gorm.io/gorm"
@@ -145,14 +144,43 @@ func (s *RuleSyncService) syncRuleStatus(r model.GostRule, serviceStates map[str
 		serviceID = fmt.Sprintf("rule-%d", r.ID)
 	}
 
-	state := serviceStates[serviceID]
-	newStatus := utils.GostStateToRuleStatus(state)
+	candidates := []string{serviceID, serviceID + "-tcp", serviceID + "-udp"}
+	var states []string
+	for _, name := range candidates {
+		if state, ok := serviceStates[name]; ok {
+			states = append(states, state)
+		}
+	}
+
+	newStatus := resolveRuleStatus(states)
 
 	// 如果状态不一致
 	if r.Status != newStatus {
-		logger.Infof("[Sync] 规则 %d (%s) 状态变更: %s -> %s (Gost State: %s)", r.ID, r.Name, r.Status, newStatus, state)
+		logger.Infof("[Sync] 规则 %d (%s) 状态变更: %s -> %s (Gost States: %v)", r.ID, r.Name, r.Status, newStatus, states)
 		_ = s.ruleRepo.UpdateStatus(r.ID, newStatus)
 	}
+}
+
+func resolveRuleStatus(states []string) model.RuleStatus {
+	if len(states) == 0 {
+		return model.RuleStatusStopped
+	}
+
+	// 任意一个运行即视为运行中
+	for _, state := range states {
+		if state == "ready" || state == "running" {
+			return model.RuleStatusRunning
+		}
+	}
+
+	// 任意一个失败即视为错误
+	for _, state := range states {
+		if state == "failed" {
+			return model.RuleStatusError
+		}
+	}
+
+	return model.RuleStatusStopped
 }
 
 // syncTunnelStatus 同步隧道状态

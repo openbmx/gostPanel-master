@@ -35,7 +35,7 @@ func Logger() gin.HandlerFunc {
 			logger.Warnf("[%d] %s %s - %s - %v - %d bytes",
 				statusCode, method, path, clientIP, latency, bodySize)
 		} else {
-			logger.Infof("[%d] %s %s - %s - %v - %d bytes",
+			logger.Debugf("[%d] %s %s - %s - %v - %d bytes",
 				statusCode, method, path, clientIP, latency, bodySize)
 		}
 	}

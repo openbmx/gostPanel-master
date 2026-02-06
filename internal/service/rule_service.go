@@ -4,6 +4,7 @@ package service
 import (
 	stderrors "errors"
 	"fmt"
+	"strings"
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/errors"
@@ -366,9 +367,19 @@ func (s *RuleService) Stop(id uint, userID uint, username string, ip, userAgent 
 
 	client := utils.GetGostClient(node)
 
-	// 删除服务
-	if rule.ServiceID != "" {
-		if err = client.DeleteService(rule.ServiceID); err != nil {
+	// 删除服务（TCP/UDP）
+	serviceID := rule.ServiceID
+	if serviceID == "" {
+		serviceID = fmt.Sprintf("rule-%d", rule.ID)
+	}
+
+	serviceIDs := []string{serviceID}
+	if !strings.HasSuffix(serviceID, "-tcp") && !strings.HasSuffix(serviceID, "-udp") {
+		serviceIDs = append(serviceIDs, serviceID+"-tcp", serviceID+"-udp")
+	}
+
+	for _, id := range serviceIDs {
+		if err = client.DeleteService(id); err != nil {
 			logger.Warnf("删除 Gost 服务失败: %v", err)
 		}
 	}

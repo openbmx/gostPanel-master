@@ -34,9 +34,6 @@ func (h *ObserverHandler) Report(c *gin.Context) {
 	// 2. 恢复 Body 供 binder 使用
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	// 3. 打印原始数据（调试用，确认接收到的内容）
-	logger.Infof("观察器上报原始数据: %s", string(bodyBytes))
-
 	var req dto.ObserverReportReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warnf("解析观察器上报数据失败: %v", err)
@@ -48,7 +45,7 @@ func (h *ObserverHandler) Report(c *gin.Context) {
 	for _, event := range req.Events {
 		if event.Type == "stats" && event.Stats != nil {
 			if event.Stats.InputBytes > 0 || event.Stats.OutputBytes > 0 {
-				logger.Infof("收到有效流量: Service=%s, In=%d, Out=%d", event.Service, event.Stats.InputBytes, event.Stats.OutputBytes)
+				logger.Debugf("收到有效流量: Service=%s, In=%d, Out=%d", event.Service, event.Stats.InputBytes, event.Stats.OutputBytes)
 			}
 		}
 	}

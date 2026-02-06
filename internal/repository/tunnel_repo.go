@@ -132,12 +132,13 @@ func (r *TunnelRepository) UpdateServiceInfo(id uint, serviceID, chainID string)
 
 // UpdateStats 更新隧道流量统计（计算增量）
 // Gost observer 上报的是累计总量，需要计算增量后再累加
-func (r *TunnelRepository) UpdateStats(id uint, reportedInputBytes, reportedOutputBytes int64) error {
+// 返回本次增量值 (inputDelta, outputDelta)
+func (r *TunnelRepository) UpdateStats(id uint, reportedInputBytes, reportedOutputBytes int64) (int64, int64, error) {
 	// 先查询当前值
 	var tunnel model.GostTunnel
 	if err := r.DB.Select("id", "last_reported_input_bytes", "last_reported_output_bytes").
 		Where("id = ?", id).First(&tunnel).Error; err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	// 计算增量（如果是第一次上报或重启后，上报值可能小于上次值，此时重置为上报值）
@@ -157,18 +158,25 @@ func (r *TunnelRepository) UpdateStats(id uint, reportedInputBytes, reportedOutp
 
 	// 只有增量大于0时才更新（避免无效更新）
 	if inputDelta > 0 || outputDelta > 0 {
-		return r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
+		if err := r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"input_bytes":                gorm.Expr("input_bytes + ?", inputDelta),
 			"output_bytes":               gorm.Expr("output_bytes + ?", outputDelta),
 			"total_bytes":                gorm.Expr("total_bytes + ?", inputDelta+outputDelta),
 			"last_reported_input_bytes":  reportedInputBytes,
 			"last_reported_output_bytes": reportedOutputBytes,
-		}).Error
+		}).Error; err != nil {
+			return 0, 0, err
+		}
+		return inputDelta, outputDelta, nil
 	}
 
 	// 没有增量，只更新上次上报值
-	return r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
+	if err := r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"last_reported_input_bytes":  reportedInputBytes,
 		"last_reported_output_bytes": reportedOutputBytes,
-	}).Error
+	}).Error; err != nil {
+		return 0, 0, err
+	}
+
+	return inputDelta, outputDelta, nil
 }

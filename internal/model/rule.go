@@ -55,6 +55,14 @@ type GostRule struct {
 	LastReportedOutputBytes int64 `gorm:"default:0" json:"-"` // 上次上报的出站累计值
 	LastReportedTotalConns  int64 `gorm:"default:0" json:"-"` // 上次上报的总连接数
 
+	// TCP/UDP 分离累计值（全流量转发时每个协议独立计数）
+	LastReportedInputBytesTCP  int64 `gorm:"default:0" json:"-"`
+	LastReportedOutputBytesTCP int64 `gorm:"default:0" json:"-"`
+	LastReportedTotalConnsTCP  int64 `gorm:"default:0" json:"-"`
+	LastReportedInputBytesUDP  int64 `gorm:"default:0" json:"-"`
+	LastReportedOutputBytesUDP int64 `gorm:"default:0" json:"-"`
+	LastReportedTotalConnsUDP  int64 `gorm:"default:0" json:"-"`
+
 	Remark    string         `gorm:"type:text" json:"remark"` // 备注
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

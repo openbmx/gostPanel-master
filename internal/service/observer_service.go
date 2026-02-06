@@ -63,20 +63,20 @@ func (s *ObserverService) processEvent(event *dto.ObserverEvent) error {
 	if strings.HasPrefix(cleanName, "relay-tunnel-") {
 		return s.updateTunnelStats(cleanName, event.Stats, "relay-tunnel-")
 	} else if strings.HasPrefix(cleanName, "rule-") {
-		return s.updateRuleStats(cleanName, event.Stats, "rule-")
+		return s.updateRuleStats(cleanName, serviceName, event.Stats, "rule-")
 	} else if strings.HasPrefix(cleanName, "forward-") {
 		// 保持向后兼容
-		return s.updateRuleStats(cleanName, event.Stats, "forward-")
+		return s.updateRuleStats(cleanName, serviceName, event.Stats, "forward-")
 	} else if strings.HasPrefix(cleanName, "tunnel-") {
 		// 保持向后兼容
-		return s.updateRuleStats(cleanName, event.Stats, "tunnel-")
+		return s.updateRuleStats(cleanName, serviceName, event.Stats, "tunnel-")
 	}
 
 	return nil
 }
 
 // updateRuleStats 更新规则统计
-func (s *ObserverService) updateRuleStats(serviceName string, stats *dto.ObserverStats, prefix string) error {
+func (s *ObserverService) updateRuleStats(serviceName, rawServiceName string, stats *dto.ObserverStats, prefix string) error {
 	// 解析 ID
 	var id uint
 	if _, err := parseServiceID(serviceName, prefix, &id); err != nil {
@@ -84,7 +84,8 @@ func (s *ObserverService) updateRuleStats(serviceName string, stats *dto.Observe
 	}
 
 	// 更新规则统计数据
-	if err := s.ruleRepo.UpdateStats(id, stats.InputBytes, stats.OutputBytes, stats.TotalConns); err != nil {
+	inputDelta, outputDelta, _, err := s.ruleRepo.UpdateStats(id, rawServiceName, stats.InputBytes, stats.OutputBytes, stats.TotalConns)
+	if err != nil {
 		return err
 	}
 
@@ -106,7 +107,7 @@ func (s *ObserverService) updateRuleStats(serviceName string, stats *dto.Observe
 
 	// 3. 更新节点流量
 	if nodeID > 0 {
-		if err := s.nodeRepo.UpdateStats(nodeID, stats.InputBytes, stats.OutputBytes); err != nil {
+		if err := s.nodeRepo.AddStatsDelta(nodeID, inputDelta, outputDelta); err != nil {
 			logger.Warnf("更新节点流量失败: %v", err)
 		}
 	}
@@ -125,7 +126,8 @@ func (s *ObserverService) updateTunnelStats(serviceName string, stats *dto.Obser
 	}
 
 	// 更新隧道统计数据
-	if err := s.tunnelRepo.UpdateStats(id, stats.InputBytes, stats.OutputBytes); err != nil {
+	inputDelta, outputDelta, err := s.tunnelRepo.UpdateStats(id, stats.InputBytes, stats.OutputBytes)
+	if err != nil {
 		return err
 	}
 
@@ -136,7 +138,7 @@ func (s *ObserverService) updateTunnelStats(serviceName string, stats *dto.Obser
 	}
 
 	if tunnel.ExitNodeID > 0 {
-		if err := s.nodeRepo.UpdateStats(tunnel.ExitNodeID, stats.InputBytes, stats.OutputBytes); err != nil {
+		if err := s.nodeRepo.AddStatsDelta(tunnel.ExitNodeID, inputDelta, outputDelta); err != nil {
 			logger.Warnf("更新节点流量失败: %v", err)
 		}
 	}

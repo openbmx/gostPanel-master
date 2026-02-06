@@ -181,3 +181,16 @@ func (r *NodeRepository) UpdateStats(id uint, reportedInputBytes, reportedOutput
 		"last_reported_output_bytes": reportedOutputBytes,
 	}).Error
 }
+
+// AddStatsDelta 按增量累加节点流量统计
+func (r *NodeRepository) AddStatsDelta(id uint, inputDelta, outputDelta int64) error {
+	if inputDelta == 0 && outputDelta == 0 {
+		return nil
+	}
+
+	return r.DB.Model(&model.GostNode{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"input_bytes":  gorm.Expr("input_bytes + ?", inputDelta),
+		"output_bytes": gorm.Expr("output_bytes + ?", outputDelta),
+		"total_bytes":  gorm.Expr("total_bytes + ?", inputDelta+outputDelta),
+	}).Error
+}

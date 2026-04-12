@@ -98,17 +98,21 @@ func (s *RuleSyncService) syncNodeRules(node model.GostNode) {
 	}
 
 	// 提取节点上的 Service 状态
+	// 注意：部分 Gost 版本/场景下 /config 只返回服务定义，不一定带运行时 status。
+	// 如果服务对象存在但没有 status，不能直接视为 stopped，否则会出现“规则明明生效但面板显示已停止”。
 	serviceStates := make(map[string]string)
 	for _, svc := range gostCfg.Services {
-		state := "stopped"
-		if svc.Status != nil {
+		state := "configured"
+		if svc.Status != nil && svc.Status.State != "" {
 			state = svc.Status.State
 		}
 		serviceStates[svc.Name] = state
 	}
 
 	// 1. 同步规则状态
-	rules, err := s.ruleRepo.FindByNodeID(node.ID)
+	// 这里必须按“实际运行入口节点”查询规则，隧道转发规则虽然 node_id 为空，
+	// 但实际服务运行在 tunnel.entry_node_id 对应的节点上。
+	rules, err := s.ruleRepo.FindByRuntimeNodeID(node.ID)
 	if err != nil {
 		logger.Errorf("[Sync] 获取节点 %d 规则失败: %v", node.ID, err)
 	} else {
@@ -167,14 +171,15 @@ func resolveRuleStatus(states []string) model.RuleStatus {
 		return model.RuleStatusStopped
 	}
 
-	// 任意一个运行即视为运行中
+	// 任意一个运行态/已配置存在态，都视为运行中。
+	// "configured" 表示服务对象已存在，但当前 API 未返回运行时状态。
 	for _, state := range states {
-		if state == "ready" || state == "running" {
+		if state == "ready" || state == "running" || state == "configured" {
 			return model.RuleStatusRunning
 		}
 	}
 
-	// 任意一个失败即视为错误
+	// 仅当没有任何运行态，但存在失败态时，才判定为错误。
 	for _, state := range states {
 		if state == "failed" {
 			return model.RuleStatusError

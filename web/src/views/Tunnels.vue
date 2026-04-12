@@ -22,6 +22,7 @@
           <el-select v-model="searchStatus" placeholder="状态" clearable style="width: 120px" @change="handleSearch">
             <el-option label="运行中" value="running" />
             <el-option label="已停止" value="stopped" />
+            <el-option label="错误" value="error" />
           </el-select>
           <el-button :icon="Search" @click="handleSearch">搜索</el-button>
           <el-button :icon="Refresh" @click="fetchData">刷新</el-button>

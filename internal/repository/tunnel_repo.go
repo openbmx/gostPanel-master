@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"gost-panel/internal/model"
 
 	"gorm.io/gorm"
@@ -130,53 +131,64 @@ func (r *TunnelRepository) UpdateServiceInfo(id uint, serviceID, chainID string)
 		}).Error
 }
 
+// ResetStatsCheckpoint 重置隧道统计检查点（不清空已累计总量）
+func (r *TunnelRepository) ResetStatsCheckpoint(id uint) error {
+	return r.UpdateFields(&model.GostTunnel{}, id, map[string]any{
+		"last_reported_input_bytes":  0,
+		"last_reported_output_bytes": 0,
+	})
+}
+
 // UpdateStats 更新隧道流量统计（计算增量）
-// Gost observer 上报的是累计总量，需要计算增量后再累加
+// Gost observer 上报的是累计总量，需要计算增量后再累加。
+// 这里使用乐观并发控制，避免同一条累计上报在并发/重试场景下被重复累计。
+// 对于小于当前检查点的回退值，视为过期/乱序快照并忽略；
+// 合法重启场景应通过显式 ResetStatsCheckpoint 将检查点归零。
 // 返回本次增量值 (inputDelta, outputDelta)
 func (r *TunnelRepository) UpdateStats(id uint, reportedInputBytes, reportedOutputBytes int64) (int64, int64, error) {
-	// 先查询当前值
-	var tunnel model.GostTunnel
-	if err := r.DB.Select("id", "last_reported_input_bytes", "last_reported_output_bytes").
-		Where("id = ?", id).First(&tunnel).Error; err != nil {
-		return 0, 0, err
-	}
-
-	// 计算增量（如果是第一次上报或重启后，上报值可能小于上次值，此时重置为上报值）
-	var inputDelta, outputDelta int64
-	if reportedInputBytes >= tunnel.LastReportedInputBytes {
-		inputDelta = reportedInputBytes - tunnel.LastReportedInputBytes
-	} else {
-		// Gost 重启后计数器重置，直接使用新值作为增量
-		inputDelta = reportedInputBytes
-	}
-
-	if reportedOutputBytes >= tunnel.LastReportedOutputBytes {
-		outputDelta = reportedOutputBytes - tunnel.LastReportedOutputBytes
-	} else {
-		outputDelta = reportedOutputBytes
-	}
-
-	// 只有增量大于0时才更新（避免无效更新）
-	if inputDelta > 0 || outputDelta > 0 {
-		if err := r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
-			"input_bytes":                gorm.Expr("input_bytes + ?", inputDelta),
-			"output_bytes":               gorm.Expr("output_bytes + ?", outputDelta),
-			"total_bytes":                gorm.Expr("total_bytes + ?", inputDelta+outputDelta),
-			"last_reported_input_bytes":  reportedInputBytes,
-			"last_reported_output_bytes": reportedOutputBytes,
-		}).Error; err != nil {
+	for attempt := 0; attempt < 5; attempt++ {
+		var tunnel model.GostTunnel
+		if err := r.DB.Select("id", "last_reported_input_bytes", "last_reported_output_bytes").
+			Where("id = ?", id).First(&tunnel).Error; err != nil {
 			return 0, 0, err
 		}
+
+		lastInput := tunnel.LastReportedInputBytes
+		lastOutput := tunnel.LastReportedOutputBytes
+
+		if reportedInputBytes == lastInput && reportedOutputBytes == lastOutput {
+			return 0, 0, nil
+		}
+		if reportedInputBytes < lastInput || reportedOutputBytes < lastOutput {
+			return 0, 0, nil
+		}
+
+		inputDelta := reportedInputBytes - lastInput
+		outputDelta := reportedOutputBytes - lastOutput
+
+		updates := map[string]any{
+			"last_reported_input_bytes":  reportedInputBytes,
+			"last_reported_output_bytes": reportedOutputBytes,
+		}
+		if inputDelta > 0 || outputDelta > 0 {
+			updates["input_bytes"] = gorm.Expr("input_bytes + ?", inputDelta)
+			updates["output_bytes"] = gorm.Expr("output_bytes + ?", outputDelta)
+			updates["total_bytes"] = gorm.Expr("total_bytes + ?", inputDelta+outputDelta)
+		}
+
+		result := r.DB.Model(&model.GostTunnel{}).
+			Where("id = ?", id).
+			Where("last_reported_input_bytes = ? AND last_reported_output_bytes = ?", lastInput, lastOutput).
+			Updates(updates)
+		if result.Error != nil {
+			return 0, 0, result.Error
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+
 		return inputDelta, outputDelta, nil
 	}
 
-	// 没有增量，只更新上次上报值
-	if err := r.DB.Model(&model.GostTunnel{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"last_reported_input_bytes":  reportedInputBytes,
-		"last_reported_output_bytes": reportedOutputBytes,
-	}).Error; err != nil {
-		return 0, 0, err
-	}
-
-	return inputDelta, outputDelta, nil
+	return 0, 0, fmt.Errorf("更新隧道统计失败: 并发冲突")
 }

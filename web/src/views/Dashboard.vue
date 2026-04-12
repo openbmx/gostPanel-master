@@ -31,6 +31,7 @@
               <div class="stat-sub">
                 <span class="online">运行 {{ stats.rules.running }}</span>
                 <span class="offline">停止 {{ stats.rules.stopped }}</span>
+                <span class="error">错误 {{ stats.rules.error || 0 }}</span>
               </div>
             </div>
           </div>
@@ -48,6 +49,7 @@
               <div class="stat-sub">
                 <span class="online">运行 {{ stats.tunnels.running || 0 }}</span>
                 <span class="offline">停止 {{ stats.tunnels.stopped || 0 }}</span>
+                <span class="error">错误 {{ stats.tunnels.error || 0 }}</span>
               </div>
             </div>
           </div>
@@ -147,8 +149,8 @@ const authStore = useAuthStore()
 // 统计数据
 const stats = reactive({
   nodes: { total: 0, online: 0, offline: 0 },
-  rules: { total: 0, running: 0, stopped: 0 },
-  tunnels: { total: 0, running: 0, stopped: 0 },
+  rules: { total: 0, running: 0, stopped: 0, error: 0 },
+  tunnels: { total: 0, running: 0, stopped: 0, error: 0 },
   version: ''
 })
 
@@ -283,6 +285,10 @@ onUnmounted(() => {
 
 .stat-sub .offline {
   color: #909399;
+}
+
+.stat-sub .error {
+  color: #f56c6c;
 }
 
 .card-header {

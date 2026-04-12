@@ -92,33 +92,20 @@ func (s *NodeHealthService) checkNodes() {
 					logger.Errorf("更新节点 %s 状态失败: %v", n.Name, err)
 				}
 
-				// 节点从离线恢复到在线，尝试重启之前运行的规则和隧道
+				// 节点从离线恢复到在线，仅记录提示。
+				// 规则/隧道真实状态交由规则同步服务按节点配置回读判断，
+				// 避免把“控制面不可达但转发面仍生效”的资源误标为 stopped。
 				if oldStatus == model.NodeStatusOffline && status == model.NodeStatusOnline {
-					logger.Infof("节点 %s 恢复在线，准备重启关联的规则和隧道", n.Name)
-					// 注意：这里只更新状态为stopped，实际重启需要通过API手动触发
-					// 或者可以在这里调用RuleService.Start()和TunnelService.Start()自动重启
-					// 但这需要注入这些服务，暂时只记录日志提示
-					logger.Warnf("节点 %s 已恢复，请手动重启相关规则和隧道，或等待后续版本支持自动重启", n.Name)
+					logger.Infof("节点 %s 恢复在线，规则与隧道状态将由同步服务自动校正", n.Name)
 				}
 			}
 
 			if status == model.NodeStatusOnline {
 				logger.Debugf("节点 %s 在线", n.Name)
 			} else {
-				// 停止其关联的所有规则和隧道
-				_ = s.ruleRepo.StopByNodeID(n.ID)
-
-				// 查找并停止受影响的隧道关联的规则
-				if tunnels, err := s.tunnelRepo.FindByNodeID(n.ID); err == nil && len(tunnels) > 0 {
-					var tunnelIDs []uint
-					for _, t := range tunnels {
-						tunnelIDs = append(tunnelIDs, t.ID)
-					}
-					_ = s.ruleRepo.StopByTunnelIDs(tunnelIDs)
-				}
-
-				_ = s.tunnelRepo.StopByNodeID(n.ID)
-				logger.Debugf("节点 %s 离线, status=%s, old=%s", n.Name, status, n.Status)
+				// 不再因为节点 API 暂时不可达就强制把规则/隧道写成 stopped。
+				// 否则会出现“规则实际仍生效，但面板显示已停止”的误判。
+				logger.Debugf("节点 %s 离线，保留规则/隧道最后已知状态，等待后续同步校正", n.Name)
 			}
 
 			_ = s.nodeRepo.UpdateLastCheck(n.ID)

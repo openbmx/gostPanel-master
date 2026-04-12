@@ -378,14 +378,23 @@ func (s *RuleService) Stop(id uint, userID uint, username string, ip, userAgent 
 		serviceIDs = append(serviceIDs, serviceID+"-tcp", serviceID+"-udp")
 	}
 
-	for _, id := range serviceIDs {
-		if err = client.DeleteService(id); err != nil {
+	deleteSucceeded := true
+	for _, serviceName := range serviceIDs {
+		if err = client.DeleteService(serviceName); err != nil {
+			deleteSucceeded = false
 			logger.Warnf("删除 Gost 服务失败: %v", err)
 		}
 	}
 
+	if err = client.SaveConfig(); err != nil {
+		deleteSucceeded = false
+		logger.Warnf("保存 Gost 配置失败: %v", err)
+	}
+
+	if deleteSucceeded {
+		_ = s.ruleRepo.ResetStatsCheckpoint(id)
+	}
 	_ = s.ruleRepo.UpdateStatus(id, model.RuleStatusStopped)
-	_ = client.SaveConfig()
 
 	s.logService.Record(
 		userID,

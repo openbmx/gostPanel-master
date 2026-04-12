@@ -46,6 +46,7 @@ type RuleStats struct {
 	Total       int64 `json:"total"`
 	Running     int64 `json:"running"`
 	Stopped     int64 `json:"stopped"`
+	Error       int64 `json:"error"`
 	ForwardType int64 `json:"forward_type"` // 端口转发类型数量
 	TunnelType  int64 `json:"tunnel_type"`  // 隧道转发类型数量
 }
@@ -55,6 +56,7 @@ type TunnelStats struct {
 	Total   int64 `json:"total"`
 	Running int64 `json:"running"`
 	Stopped int64 `json:"stopped"`
+	Error   int64 `json:"error"`
 }
 
 // GetDashboardStats 获取仪表盘统计
@@ -85,6 +87,14 @@ func (s *StatsService) GetDashboardStats() (*DashboardStats, error) {
 	if err != nil {
 		return nil, err
 	}
+	ruleStopped, err := s.ruleRepo.CountByStatus(model.RuleStatusStopped)
+	if err != nil {
+		return nil, err
+	}
+	ruleError, err := s.ruleRepo.CountByStatus(model.RuleStatusError)
+	if err != nil {
+		return nil, err
+	}
 	forwardType, err := s.ruleRepo.CountByType(model.RuleTypeForward)
 	if err != nil {
 		return nil, err
@@ -96,7 +106,8 @@ func (s *StatsService) GetDashboardStats() (*DashboardStats, error) {
 	stats.Rules = RuleStats{
 		Total:       ruleTotal,
 		Running:     ruleRunning,
-		Stopped:     ruleTotal - ruleRunning,
+		Stopped:     ruleStopped,
+		Error:       ruleError,
 		ForwardType: forwardType,
 		TunnelType:  tunnelType,
 	}
@@ -110,10 +121,19 @@ func (s *StatsService) GetDashboardStats() (*DashboardStats, error) {
 	if err != nil {
 		return nil, err
 	}
+	tunnelStopped, err := s.tunnelRepo.CountByStatus(model.TunnelStatusStopped)
+	if err != nil {
+		return nil, err
+	}
+	tunnelError, err := s.tunnelRepo.CountByStatus(model.TunnelStatusError)
+	if err != nil {
+		return nil, err
+	}
 	stats.Tunnels = TunnelStats{
 		Total:   tunnelTotal,
 		Running: tunnelRunning,
-		Stopped: tunnelTotal - tunnelRunning,
+		Stopped: tunnelStopped,
+		Error:   tunnelError,
 	}
 
 	stats.Version = config.Version

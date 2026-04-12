@@ -363,22 +363,36 @@ func (s *TunnelService) Stop(id uint, userID uint, username string, ip, userAgen
 	entryNode, _ := s.nodeRepo.FindByID(tunnel.EntryNodeID)
 	exitNode, _ := s.nodeRepo.FindByID(tunnel.ExitNodeID)
 
+	deleteSucceeded := true
+
 	// 步骤1：删除入口节点的 Chain
 	if entryNode != nil && entryNode.Status == model.NodeStatusOnline && tunnel.ChainID != "" {
 		entryClient := utils.GetGostClient(entryNode)
 		if err = entryClient.DeleteChain(tunnel.ChainID); err != nil {
+			deleteSucceeded = false
 			logger.Warnf("删除隧道 Chain 失败: %v", err)
 		}
-		_ = entryClient.SaveConfig()
+		if err = entryClient.SaveConfig(); err != nil {
+			deleteSucceeded = false
+			logger.Warnf("保存入口节点 Gost 配置失败: %v", err)
+		}
 	}
 
 	// 步骤2：删除出口节点的 Relay 服务
 	if exitNode != nil && exitNode.Status == model.NodeStatusOnline && tunnel.ServiceID != "" {
 		exitClient := utils.GetGostClient(exitNode)
 		if err = exitClient.DeleteService(tunnel.ServiceID); err != nil {
+			deleteSucceeded = false
 			logger.Warnf("删除隧道 Relay 服务失败: %v", err)
 		}
-		_ = exitClient.SaveConfig()
+		if err = exitClient.SaveConfig(); err != nil {
+			deleteSucceeded = false
+			logger.Warnf("保存出口节点 Gost 配置失败: %v", err)
+		}
+	}
+
+	if deleteSucceeded {
+		_ = s.tunnelRepo.ResetStatsCheckpoint(id)
 	}
 
 	// 更新状态

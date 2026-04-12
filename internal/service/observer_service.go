@@ -40,12 +40,16 @@ func (s *ObserverService) HandleReport(req *dto.ObserverReportReq) error {
 
 // processEvent 处理单个事件
 func (s *ObserverService) processEvent(event *dto.ObserverEvent) error {
-	// 只处理统计类型的事件
-	if event.Type != "stats" || event.Stats == nil {
+	// 只处理 service 级的统计事件，忽略 handler 级别的细粒度统计，避免重复累计
+	if !strings.EqualFold(event.Type, "stats") || event.Stats == nil {
 		return nil
 	}
 
-	serviceName := event.Service
+	if !shouldProcessServiceStats(event) {
+		return nil
+	}
+
+	serviceName := strings.TrimSpace(event.Service)
 	if serviceName == "" {
 		return nil
 	}
@@ -73,6 +77,45 @@ func (s *ObserverService) processEvent(event *dto.ObserverEvent) error {
 	}
 
 	return nil
+}
+
+func shouldProcessServiceStats(event *dto.ObserverEvent) bool {
+	kind := strings.ToLower(strings.TrimSpace(event.Kind))
+	client := strings.TrimSpace(event.Client)
+
+	if kind == "" && client != "" {
+		logIgnoredHandlerStats(event, "client present without kind")
+		return false
+	}
+
+	switch kind {
+	case "", "service":
+		return true
+	case "handler":
+		logIgnoredHandlerStats(event, "handler kind")
+		return false
+	default:
+		logger.Debugf("忽略未知 kind 的观察器统计事件: Kind=%s, Service=%s, Client=%s", event.Kind, event.Service, event.Client)
+		return false
+	}
+}
+
+func logIgnoredHandlerStats(event *dto.ObserverEvent, reason string) {
+	if !hasMeaningfulStats(event.Stats) {
+		return
+	}
+
+	logger.Debugf("忽略观察器细粒度流量事件以避免重复累计: Reason=%s, Kind=%s, Service=%s, Client=%s, In=%d, Out=%d, Conns=%d",
+		reason, event.Kind, event.Service, event.Client,
+		event.Stats.InputBytes, event.Stats.OutputBytes, event.Stats.TotalConns)
+}
+
+func hasMeaningfulStats(stats *dto.ObserverStats) bool {
+	if stats == nil {
+		return false
+	}
+
+	return stats.InputBytes > 0 || stats.OutputBytes > 0 || stats.TotalConns > 0 || stats.CurrentConns > 0 || stats.TotalErrs > 0
 }
 
 // updateRuleStats 更新规则统计

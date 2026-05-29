@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,9 +23,18 @@ import (
 func main() {
 	// 解析命令行参数
 	var configPath string
+	var showVersion bool
 	flag.StringVar(&configPath, "c", "", "配置文件路径")
 	flag.StringVar(&configPath, "config", "", "配置文件路径")
+	flag.BoolVar(&showVersion, "version", false, "打印版本号并退出")
+	flag.BoolVar(&showVersion, "v", false, "打印版本号并退出")
 	flag.Parse()
+
+	// 打印版本号（供升级脚本/运维查询）
+	if showVersion {
+		fmt.Println("gost-panel", config.Version)
+		return
+	}
 
 	// 加载配置
 	cfg, err := config.Load(configPath)

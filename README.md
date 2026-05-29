@@ -108,6 +108,33 @@ bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main
 bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/install_node.sh) uninstall
 ```
 
+## ⬆️ 在线升级
+
+升级脚本**只替换二进制，完整保留配置文件与数据库**，并在升级前自动备份、升级后健康检查，若失败会自动回滚到旧版本，不影响现有功能与数据。
+
+**升级服务端（主控）到最新版:**
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/upgrade_panel.sh)
+```
+
+**升级到指定版本 / 使用加速:**
+```bash
+VERSION=v1.2.0 GH_PROXY="https://ghfast.top/" \
+  bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/upgrade_panel.sh)
+```
+
+**升级被控端节点（GOST，兼容 systemd / OpenRC）:**
+```bash
+# 默认升级到脚本内置 GOST 版本，可用 GOST_VERSION 指定
+GOST_VERSION=3.2.6 \
+  bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/upgrade_node.sh)
+```
+
+> 升级机制说明：
+> - 旧二进制备份为 `*.bak.<时间戳>`，数据库/配置同样自动备份；确认无误后可手动删除。
+> - 服务端健康检查通过 `http://127.0.0.1:<端口>/api/v1/health`；节点检查服务存活与 API 端口监听。
+> - Docker 部署的升级方式：`docker compose pull && docker compose up -d`（数据通过卷持久化，不会丢失）。
+
 ## 🔐 环境变量配置
 
 面板支持通过 `GOSTPANEL_` 前缀的环境变量覆盖 `config/config.yaml` 中的任意配置（适合 Docker / systemd 部署）：

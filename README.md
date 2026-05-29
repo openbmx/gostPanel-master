@@ -46,6 +46,31 @@
 - **用户名**: `admin`
 - **密码**: 一键脚本部署时随机生成；手动/Docker 部署默认 `admin123`（请立即修改）
 
+### ⭐ 方式 0：一键管理脚本（最简单，推荐新手）
+
+一个交互式菜单脚本，集成了**安装、升级、卸载、启停、状态查看、日志**等全部常用功能，服务端与节点都能管。运行后按数字选择即可：
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/gost.sh)
+```
+
+菜单功能一览：
+
+| 选项 | 功能 | 说明 |
+| :--: | :--- | :--- |
+| 1 | 安装/重装服务端 | 可自定义端口，自动生成管理员密码 |
+| 2 | 升级服务端 | **保留配置与数据库**，失败自动回滚 |
+| 3 | 卸载服务端 | 可选择是否保留数据 |
+| 4 | 查看服务端信息 | 显示访问地址、版本、状态 |
+| 5 | 安装/重装节点 | 可自定义端口与 API 账号 |
+| 6 | 升级节点 | **保留账号配置**，兼容 systemd/OpenRC |
+| 7 | 卸载节点 | — |
+| 8~11 | 启动/停止/重启/查看日志 | 服务端与节点通用 |
+
+> 国内网络可加速：`GH_PROXY="https://ghfast.top/" bash <(curl -sSL .../gost.sh)`
+
+如需手动控制每一步，也可使用下面的独立脚本：
+
 ### 方式 A：Docker Compose（推荐）
 
 镜像托管于 GitHub Container Registry：`ghcr.io/openbmx/gostpanel:latest`

@@ -230,6 +230,40 @@
         </ol>
       </div>
 
+      <!-- 节点升级命令 -->
+      <el-divider content-position="left">节点升级</el-divider>
+      <el-alert type="success" :closable="false" style="margin-bottom: 12px;">
+        <template #title>
+          升级会保留节点的配置与 API 账号，仅替换 Gost 程序，失败自动回滚，不影响已有转发。
+        </template>
+      </el-alert>
+      <div class="install-command-section">
+        <div class="command-header">
+          <span class="command-title">一键升级命令</span>
+          <el-button type="success" size="small" :icon="CopyDocument" @click="copyUpgradeCommand">复制命令</el-button>
+        </div>
+        <div class="command-box">
+          <code>{{ upgradeCommand }}</code>
+        </div>
+      </div>
+
+      <!-- 一键管理脚本 -->
+      <el-divider content-position="left">一键管理脚本（推荐）</el-divider>
+      <el-alert type="info" :closable="false" style="margin-bottom: 12px;">
+        <template #title>
+          交互式菜单，集成节点的安装、升级、卸载、启停、日志等功能，按数字选择即可。
+        </template>
+      </el-alert>
+      <div class="install-command-section">
+        <div class="command-header">
+          <span class="command-title">一键管理命令</span>
+          <el-button type="primary" size="small" :icon="CopyDocument" @click="copyManageCommand">复制命令</el-button>
+        </div>
+        <div class="command-box">
+          <code>{{ manageCommand }}</code>
+        </div>
+      </div>
+
       <template #footer>
         <el-button @click="installDialogVisible = false">关闭</el-button>
       </template>
@@ -243,8 +277,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, CopyDocument, Management, Link, User, Lock } from '@element-plus/icons-vue'
 import { getNodeList, createNode, updateNode, deleteNode, getNodeConfig } from '@/api/node'
 
-// 节点安装脚本 URL（GitHub 自托管）
+// 节点脚本 URL（GitHub 自托管）
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/install_node.sh'
+const UPGRADE_SCRIPT_URL = 'https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/upgrade_node.sh'
+const MANAGE_SCRIPT_URL = 'https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/gost.sh'
 
 // 列表数据
 const nodeList = ref([])
@@ -310,6 +346,16 @@ const installCommand = computed(() => {
   return cmd
 })
 
+// 生成升级命令（保留配置与账号，自动回滚）
+const upgradeCommand = computed(() => {
+  return `bash <(curl -sL ${UPGRADE_SCRIPT_URL})`
+})
+
+// 一键管理脚本命令（菜单式：安装/升级/卸载/启停）
+const manageCommand = computed(() => {
+  return `bash <(curl -sSL ${MANAGE_SCRIPT_URL})`
+})
+
 // 显示安装命令对话框
 const showInstallCommand = (row) => {
   currentInstallNode.value = row
@@ -321,6 +367,26 @@ const copyInstallCommand = async () => {
   try {
     await navigator.clipboard.writeText(installCommand.value)
     ElMessage.success('安装命令已复制到剪贴板')
+  } catch (error) {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 复制升级命令
+const copyUpgradeCommand = async () => {
+  try {
+    await navigator.clipboard.writeText(upgradeCommand.value)
+    ElMessage.success('升级命令已复制到剪贴板')
+  } catch (error) {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 复制一键管理脚本命令
+const copyManageCommand = async () => {
+  try {
+    await navigator.clipboard.writeText(manageCommand.value)
+    ElMessage.success('管理脚本命令已复制到剪贴板')
   } catch (error) {
     ElMessage.error('复制失败，请手动复制')
   }

@@ -1,7 +1,8 @@
 #!/bin/bash
 # ========================================================
 #  Gost Panel 一键安装脚本
-#  用于从 cc.maipian.de 快速部署
+#  二进制从 GitHub Releases 自托管下载
+#  仓库: https://github.com/openbmx/gostPanel-master
 # ========================================================
 
 set -e
@@ -13,9 +14,10 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PLAIN='\033[0m'
 
-# 配置
-DOWNLOAD_URL="https://cc.maipian.de/gost-node"
-VERSION="latest"
+# 配置（均可通过环境变量覆盖）
+REPO="${REPO:-openbmx/gostPanel-master}"   # GitHub 仓库 owner/name
+VERSION="${VERSION:-latest}"               # latest 或具体 tag，如 v1.0.0
+GH_PROXY="${GH_PROXY:-}"                    # 可选 GitHub 加速前缀，如 https://ghfast.top/
 INSTALL_PATH="/usr/local/bin"
 CONFIG_PATH="/etc/gost-panel"
 DATA_PATH="/var/lib/gost-panel"
@@ -44,30 +46,48 @@ get_arch() {
     esac
 }
 
-# 下载文件
+# 下载文件（GitHub Releases，发布产物为 tar.gz 压缩包）
 download_binary() {
     local arch=$(get_arch)
-    local binary_name="gost-panel-linux-${arch}"
-    local url="${DOWNLOAD_URL}/${binary_name}"
-    
-    echo -e "${BLUE}[1/6] 下载 Gost Panel ($arch)...${PLAIN}"
+    local asset="gost-panel-linux-${arch}.tar.gz"
+    local url
+    if [ "$VERSION" = "latest" ]; then
+        url="${GH_PROXY}https://github.com/${REPO}/releases/latest/download/${asset}"
+    else
+        url="${GH_PROXY}https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+    fi
+
+    echo -e "${BLUE}[1/6] 从 GitHub 下载 Gost Panel ($arch)...${PLAIN}"
     echo "URL: $url"
-    
-    if command -v wget &> /dev/null; then
-        wget --no-check-certificate -O /tmp/gost-panel "$url"
-    elif command -v curl &> /dev/null; then
-        curl -L -k -o /tmp/gost-panel "$url"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    # 使用安全的 TLS 校验下载（GitHub 证书有效，切勿关闭校验）
+    if command -v curl &> /dev/null; then
+        curl -fL -o "${tmp_dir}/${asset}" "$url"
+    elif command -v wget &> /dev/null; then
+        wget -O "${tmp_dir}/${asset}" "$url"
     else
         echo -e "${RED}[错误] 需要 wget 或 curl${PLAIN}"
         exit 1
     fi
-    
-    if [ ! -f /tmp/gost-panel ]; then
-        echo -e "${RED}[错误] 下载失败${PLAIN}"
+
+    if [ ! -s "${tmp_dir}/${asset}" ]; then
+        echo -e "${RED}[错误] 下载失败，请检查网络或设置 GH_PROXY 加速${PLAIN}"
         exit 1
     fi
-    
+
+    # 解压并提取二进制
+    tar -zxf "${tmp_dir}/${asset}" -C "${tmp_dir}"
+    if [ ! -f "${tmp_dir}/gost-panel-linux-${arch}" ]; then
+        echo -e "${RED}[错误] 压缩包内未找到 gost-panel 二进制${PLAIN}"
+        exit 1
+    fi
+
+    mv "${tmp_dir}/gost-panel-linux-${arch}" /tmp/gost-panel
     chmod +x /tmp/gost-panel
+    rm -rf "${tmp_dir}"
     echo -e "${GREEN}✅ 下载完成${PLAIN}"
 }
 

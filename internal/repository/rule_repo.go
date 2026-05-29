@@ -274,10 +274,8 @@ func (r *RuleRepository) UpdateStats(id uint, serviceName string, reportedInputB
 			lastConns = rule.LastReportedTotalConns
 		}
 
+		// 精确重复上报（累计值完全一致）直接去重，避免在并发/重试场景下重复累计。
 		if reportedInputBytes == lastInput && reportedOutputBytes == lastOutput && reportedTotalConns == lastConns {
-			return 0, 0, 0, nil
-		}
-		if reportedInputBytes < lastInput || reportedOutputBytes < lastOutput || reportedTotalConns < lastConns {
 			return 0, 0, 0, nil
 		}
 
@@ -301,9 +299,22 @@ func (r *RuleRepository) UpdateStats(id uint, serviceName string, reportedInputB
 			return 0, 0, 0, nil
 		}
 
+		// Gost observer 工作在累计模式 (observer.resetTraffic=false)。
+		// 当 Gost 进程或服务被重启时，累计计数器会归零，导致本次上报值小于检查点。
+		// 这并非乱序快照，而是“计数器重置”，应把本次上报值作为新的增量重新开始累计，
+		// 否则检查点会永远停留在旧的高位，规则流量将不再增长（历史 BUG：非计划重启后流量冻结）。
 		inputDelta := reportedInputBytes - lastInput
+		if inputDelta < 0 {
+			inputDelta = reportedInputBytes
+		}
 		outputDelta := reportedOutputBytes - lastOutput
+		if outputDelta < 0 {
+			outputDelta = reportedOutputBytes
+		}
 		connsDelta := reportedTotalConns - lastConns
+		if connsDelta < 0 {
+			connsDelta = reportedTotalConns
+		}
 
 		updates := map[string]interface{}{
 			inputField:  reportedInputBytes,

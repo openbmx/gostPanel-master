@@ -58,11 +58,20 @@ func (j *JWT) GenerateToken(userID uint, username string) (string, error) {
 	return token.SignedString([]byte(j.config.Secret))
 }
 
+// ExpireSeconds 返回 Token 的有效期（秒）
+func (j *JWT) ExpireSeconds() int64 {
+	return j.config.Expire
+}
+
 // ParseToken 解析 Token
 func (j *JWT) ParseToken(tokenString string) (*Claims, error) {
+	// 显式限定仅接受 HS256，防止 alg 混淆 / alg=none 等签名算法降级攻击。
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, ErrTokenInvalid
+		}
 		return []byte(j.config.Secret), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 
 	if err != nil {
 		// 判断具体错误类型

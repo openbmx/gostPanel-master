@@ -1,6 +1,7 @@
 services:
   gostpanel:
-    image: ghcr.io/apicoder-peng/gostpanel:latest
+    # 镜像由本仓库 GitHub Actions 自动构建并推送到 GHCR
+    image: ghcr.io/openbmx/gostpanel:latest
     container_name: gostpanel
     ports:
       - "39100:39100"
@@ -10,6 +11,9 @@ services:
     environment:
       - GIN_MODE=release
       - TZ=Asia/Shanghai
+      # 可选：通过环境变量覆盖配置（生产环境务必设置强随机密钥）
+      # - GOSTPANEL_JWT_SECRET=请填写足够随机的长字符串
+      # - GOSTPANEL_ADMIN_PASSWORD=请修改默认管理员密码
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:39100/api/v1/health"]

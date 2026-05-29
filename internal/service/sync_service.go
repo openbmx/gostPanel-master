@@ -167,26 +167,32 @@ func (s *RuleSyncService) syncRuleStatus(r model.GostRule, serviceStates map[str
 }
 
 func resolveRuleStatus(states []string) model.RuleStatus {
+	// serviceStates 仅包含节点 /config 中真实存在的服务。
+	// 因此 states 为空 = 服务对象在节点上不存在 = 真正的“已停止/已删除”。
 	if len(states) == 0 {
 		return model.RuleStatusStopped
 	}
 
-	// 任意一个运行态/已配置存在态，都视为运行中。
-	// "configured" 表示服务对象已存在，但当前 API 未返回运行时状态。
+	// 服务对象存在的情况下，只要不是“全部明确失败”，就视为运行中。
+	// 说明：
+	//   - 不同 Gost 版本对运行时 state 的取值并不统一（ready/running/active/up/""/configured 等），
+	//     甚至同一服务在 TCP/UDP 两个子服务上可能返回不同字符串。
+	//   - 之前的实现只把 ready/running/configured 当作运行，导致返回 closed/未知值
+	//     或暂时缺失 status 的隧道转发服务被误判为“已停止”，而实际链路仍在转发。
+	//   - 因此这里改为“白名单失败、其余即运行”的判定：服务存在且未全部失败即 running。
+	hasNonFailed := false
 	for _, state := range states {
-		if state == "ready" || state == "running" || state == "configured" {
-			return model.RuleStatusRunning
+		if state != "failed" {
+			hasNonFailed = true
+			break
 		}
 	}
-
-	// 仅当没有任何运行态，但存在失败态时，才判定为错误。
-	for _, state := range states {
-		if state == "failed" {
-			return model.RuleStatusError
-		}
+	if hasNonFailed {
+		return model.RuleStatusRunning
 	}
 
-	return model.RuleStatusStopped
+	// 走到这里说明所有匹配到的服务状态都是 failed。
+	return model.RuleStatusError
 }
 
 // syncTunnelStatus 同步隧道状态

@@ -6,6 +6,7 @@ import (
 	"gost-panel/internal/service"
 	"gost-panel/pkg/logger"
 	"io"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -20,10 +21,14 @@ func NewObserverHandler(observerService *service.ObserverService) *ObserverHandl
 	return &ObserverHandler{observerService: observerService}
 }
 
+// maxObserverBodyBytes 限制观察器上报请求体大小，防止未认证接口被超大请求体耗尽内存。
+const maxObserverBodyBytes = 4 << 20 // 4 MiB
+
 // Report 接收 GOST 观察器上报的数据
 // POST /api/v1/observer/report
 func (h *ObserverHandler) Report(c *gin.Context) {
-	// 1. 读取原始 Body
+	// 1. 读取原始 Body（限制最大体积，避免未认证端点被滥用导致 OOM）
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxObserverBodyBytes)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.Warnf("读取观察器上报数据失败: %v", err)

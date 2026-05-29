@@ -1,16 +1,23 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
 
 // Version 编译时注入的版本号
 var Version = "dev"
+
+// weakDefaultJWTSecret 历史版本中硬编码的弱默认密钥。
+// 一旦泄露，任何人都能伪造管理员 Token，因此检测到它时会强制替换为随机密钥。
+const weakDefaultJWTSecret = "zxcvbnm123456"
 
 // Config 应用配置结构
 type Config struct {
@@ -60,6 +67,21 @@ var cfg *Config
 func Load(configPath string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
+
+	// 环境变量覆盖（便于 Docker / Kubernetes 部署）：
+	// 例如 GOSTPANEL_SERVER_PORT、GOSTPANEL_JWT_SECRET、GOSTPANEL_ADMIN_PASSWORD。
+	v.SetEnvPrefix("GOSTPANEL")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+	for _, key := range []string{
+		"server.port", "server.mode",
+		"database.type", "database.path",
+		"jwt.secret", "jwt.expire",
+		"log.level", "log.format", "log.output",
+		"admin.username", "admin.password",
+	} {
+		_ = v.BindEnv(key)
+	}
 
 	// 确定配置文件路径
 	if configPath != "" {
@@ -118,8 +140,18 @@ func setDefaults(cfg *Config) {
 	}
 
 	// JWT 默认配置
-	if cfg.JWT.Secret == "" {
-		cfg.JWT.Secret = "zxcvbnm123456"
+	// 安全：绝不允许使用空密钥或历史弱默认密钥，否则任何人都能伪造管理员 Token。
+	if cfg.JWT.Secret == "" || cfg.JWT.Secret == weakDefaultJWTSecret {
+		if secret, err := randomSecret(48); err == nil {
+			cfg.JWT.Secret = secret
+			fmt.Fprintln(os.Stderr, "[安全警告] 未配置有效的 jwt.secret，已自动生成随机密钥。")
+			fmt.Fprintln(os.Stderr, "          注意：随机密钥在每次重启后都会变化，导致已签发的 Token 失效（需重新登录）。")
+			fmt.Fprintln(os.Stderr, "          请在 config.yaml 的 jwt.secret 或环境变量 GOSTPANEL_JWT_SECRET 中设置固定且足够强的密钥。")
+		} else {
+			// 极端情况下随机源不可用，退回弱默认值但给出明确警告。
+			cfg.JWT.Secret = weakDefaultJWTSecret
+			fmt.Fprintln(os.Stderr, "[安全警告] 生成随机 jwt.secret 失败，临时使用不安全的默认密钥，请尽快手动配置！")
+		}
 	}
 	if cfg.JWT.Expire == 0 {
 		cfg.JWT.Expire = 7200 // 2小时
@@ -143,6 +175,18 @@ func setDefaults(cfg *Config) {
 	if cfg.Admin.Password == "" {
 		cfg.Admin.Password = "admin123"
 	}
+	if cfg.Admin.Password == "admin123" {
+		fmt.Fprintln(os.Stderr, "[安全警告] 正在使用默认管理员密码 admin123，存在被暴力破解风险，请登录后立即修改或通过配置 / 环境变量设置强密码。")
+	}
+}
+
+// randomSecret 生成指定字节数的密码学安全随机串（十六进制编码）。
+func randomSecret(numBytes int) (string, error) {
+	buf := make([]byte, numBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Get 获取全局配置实例

@@ -159,12 +159,17 @@ func (r *TunnelRepository) UpdateStats(id uint, reportedInputBytes, reportedOutp
 		if reportedInputBytes == lastInput && reportedOutputBytes == lastOutput {
 			return 0, 0, nil
 		}
-		if reportedInputBytes < lastInput || reportedOutputBytes < lastOutput {
-			return 0, 0, nil
-		}
 
+		// 累计模式下 reported < last 表示 Gost 计数器重置（进程/服务重启），
+		// 按计数器重置处理：以本次上报值作为新的增量重新累计，避免流量永久冻结。
 		inputDelta := reportedInputBytes - lastInput
+		if inputDelta < 0 {
+			inputDelta = reportedInputBytes
+		}
 		outputDelta := reportedOutputBytes - lastOutput
+		if outputDelta < 0 {
+			outputDelta = reportedOutputBytes
+		}
 
 		updates := map[string]any{
 			"last_reported_input_bytes":  reportedInputBytes,

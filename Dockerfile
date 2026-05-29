@@ -41,9 +41,10 @@ COPY --from=backend-builder /app/config ./config
 # 创建目录
 RUN mkdir -p /app/data /app/logs
 
-EXPOSE 8080
+# 面板默认监听 :39100（见 config/config.yaml）
+EXPOSE 39100
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/api/v1/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:39100/api/v1/health || exit 1
 
 CMD ["./gost-panel"]

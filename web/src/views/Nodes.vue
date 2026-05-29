@@ -243,8 +243,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, CopyDocument, Management, Link, User, Lock } from '@element-plus/icons-vue'
 import { getNodeList, createNode, updateNode, deleteNode, getNodeConfig } from '@/api/node'
 
-// 安装脚本 URL（自定义服务器）
-const INSTALL_SCRIPT_URL = 'https://cc.maipian.de/gost-node/install_node.sh'
+// 节点安装脚本 URL（GitHub 自托管）
+const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/install_node.sh'
 
 // 列表数据
 const nodeList = ref([])

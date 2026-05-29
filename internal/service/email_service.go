@@ -37,9 +37,10 @@ func (s *SystemConfigService) SendTestEmail(req *dto.EmailConfigReq) error {
 
 	if req.Port == 465 {
 		// SMTPS 需自定义 dialer
+		// 默认校验服务端证书，防止中间人攻击；如确需连接自签名服务器，
+		// 应单独提供显式开关，而不是无条件信任任意证书。
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true, // 允许自签名证书，生产环境建议关闭
-			ServerName:         req.Host,
+			ServerName: req.Host,
 		}
 
 		conn, err := tls.Dial("tcp", addr, tlsConfig)

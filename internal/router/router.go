@@ -80,7 +80,8 @@ func (r *Router) Setup(engine *gin.Engine) {
 
 	// 公开路由（无需认证）
 	{
-		apiV1.POST("/auth/login", authHandler.Login)
+		// 登录接口加入限流，缓解暴力破解
+		apiV1.POST("/auth/login", middleware.LoginRateLimit(), authHandler.Login)
 		// 流量上报接口
 		apiV1.POST("/observer/report", observerHandler.Report)
 		// 公开系统配置

@@ -30,7 +30,10 @@ func CORS() gin.HandlerFunc {
 			"Content-Type",
 		},
 		// 是否允许携带凭证
-		AllowCredentials: true,
+		// 本面板使用 Authorization 头（Bearer Token）进行认证，不依赖 Cookie。
+		// 同时允许 AllowOrigins=["*"] 与 AllowCredentials=true 既违反 CORS 规范，
+		// 也会放大跨站攻击面，因此关闭凭证携带。
+		AllowCredentials: false,
 		// 预检请求缓存时间
 		MaxAge: 12 * time.Hour,
 	})

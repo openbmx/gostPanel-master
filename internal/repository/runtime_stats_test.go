@@ -104,7 +104,7 @@ func TestRuleRepositoryUpdateStatsDeduplicatesDuplicateReports(t *testing.T) {
 	}
 }
 
-func TestRuleRepositoryUpdateStatsIgnoresOutOfOrderRollback(t *testing.T) {
+func TestRuleRepositoryUpdateStatsHandlesCounterReset(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	repo := NewRuleRepository(db)
 	node := createRepositoryTestNode(t, db, "node-1")
@@ -115,26 +115,29 @@ func TestRuleRepositoryUpdateStatsIgnoresOutOfOrderRollback(t *testing.T) {
 		t.Fatalf("baseline update stats failed: %v", err)
 	}
 
+	// 模拟 Gost 进程/服务重启：累计计数器归零后从较小值重新上报。
+	// 这必须被识别为“计数器重置”，并把本次上报值作为新的增量继续累计，
+	// 而不是被忽略（否则流量会永久冻结）。
 	inputDelta, outputDelta, connsDelta, err := repo.UpdateStats(rule.ID, serviceName, 20, 10, 1)
 	if err != nil {
-		t.Fatalf("rollback update stats failed: %v", err)
+		t.Fatalf("counter-reset update stats failed: %v", err)
 	}
-	if inputDelta != 0 || outputDelta != 0 || connsDelta != 0 {
-		t.Fatalf("rollback report should be ignored: in=%d out=%d conns=%d", inputDelta, outputDelta, connsDelta)
+	if inputDelta != 20 || outputDelta != 10 || connsDelta != 1 {
+		t.Fatalf("counter reset should accumulate reported value as delta: in=%d out=%d conns=%d", inputDelta, outputDelta, connsDelta)
 	}
 
 	var updated model.GostRule
 	if err := db.First(&updated, rule.ID).Error; err != nil {
 		t.Fatalf("load updated rule failed: %v", err)
 	}
-	if updated.InputBytes != 200 || updated.OutputBytes != 80 || updated.TotalBytes != 280 {
-		t.Fatalf("rollback report should not change accumulated traffic: %+v", updated)
+	if updated.InputBytes != 220 || updated.OutputBytes != 90 || updated.TotalBytes != 310 {
+		t.Fatalf("counter reset should continue accumulating traffic: %+v", updated)
 	}
-	if updated.TotalRequests != 3 {
-		t.Fatalf("rollback report should not change request count: %d", updated.TotalRequests)
+	if updated.TotalRequests != 4 {
+		t.Fatalf("counter reset should continue accumulating request count: %d", updated.TotalRequests)
 	}
-	if updated.LastReportedInputBytesTCP != 200 || updated.LastReportedOutputBytesTCP != 80 || updated.LastReportedTotalConnsTCP != 3 {
-		t.Fatalf("rollback report should not move checkpoints: %+v", updated)
+	if updated.LastReportedInputBytesTCP != 20 || updated.LastReportedOutputBytesTCP != 10 || updated.LastReportedTotalConnsTCP != 1 {
+		t.Fatalf("counter reset should move checkpoints to the new low value: %+v", updated)
 	}
 }
 

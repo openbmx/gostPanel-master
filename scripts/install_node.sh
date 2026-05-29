@@ -82,7 +82,8 @@ uninstall() {
 # 安装二进制文件
 install_bin() {
     local arch=$(get_arch)
-    local url="${GH_PROXY}https://hubproxy.maipian.de/github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${arch}.tar.gz"
+    # 直接从 go-gost 官方 GitHub Releases 下载；如需加速可设置 GH_PROXY 前缀
+    local url="${GH_PROXY}https://github.com/go-gost/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_${arch}.tar.gz"
     
     info "正在下载 Gost v${GOST_VERSION} (${arch})..."
     info "下载地址: $url"

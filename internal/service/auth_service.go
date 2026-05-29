@@ -3,6 +3,7 @@ package service
 
 import (
 	stderrors "errors"
+	"time"
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/errors"
@@ -75,7 +76,7 @@ func (s *AuthService) Login(req *dto.LoginReq, ip, userAgent string) (*LoginResp
 
 	return &LoginResponse{
 		Token:    token,
-		ExpireAt: 0, // TODO: 从配置中获取
+		ExpireAt: time.Now().Add(time.Duration(s.jwt.ExpireSeconds()) * time.Second).Unix(),
 		User:     user,
 	}, nil
 }

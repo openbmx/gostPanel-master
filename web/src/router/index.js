@@ -47,12 +47,6 @@ const routes = [
                 meta: { title: '操作日志', icon: 'Document' }
             },
             {
-                path: 'logs',
-                name: 'Logs',
-                component: () => import('@/views/Logs.vue'),
-                meta: { title: '操作日志', icon: 'Document' }
-            },
-            {
                 path: 'system',
                 name: 'System',
                 component: () => import('@/views/System.vue'),

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // RuleRepository 规则仓库
@@ -26,8 +27,24 @@ func (r *RuleRepository) Create(rule *model.GostRule) error {
 }
 
 // Update 更新规则
+// 注意：必须 Omit 关联，否则 GORM 会因 belongs-to 关联（Tunnel/Node）的自动保存，
+// 用预加载的旧关联对象主键反写回外键（tunnel_id/node_id），导致隧道切换“看似成功实则未生效”。
 func (r *RuleRepository) Update(rule *model.GostRule) error {
-	return r.DB.Save(rule).Error
+	return r.DB.Omit(clause.Associations).Save(rule).Error
+}
+
+// UpdateConfig 仅更新规则的可编辑配置字段。
+// 相比全量 Save，可避免两类问题：
+//  1. belongs-to 关联反写外键（导致 tunnel_id 被旧关联覆盖）；
+//  2. 全量写回时覆盖观察器并发更新的流量统计字段（input/output/total 等），造成流量统计回退。
+func (r *RuleRepository) UpdateConfig(rule *model.GostRule) error {
+	return r.DB.Model(&model.GostRule{}).
+		Where("id = ?", rule.ID).
+		Select(
+			"name", "listen_port", "targets", "strategy", "enable_tls", "remark",
+			"node_id", "tunnel_id", "primary_tunnel_id", "backup_tunnel_ids", "status",
+		).
+		Updates(rule).Error
 }
 
 // Delete 删除规则

@@ -4,6 +4,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/errors"
@@ -25,6 +26,10 @@ type RuleService struct {
 	sysRepo       *repository.SystemConfigRepository
 	logService    *LogService
 	tunnelService *TunnelService
+
+	// ruleLocks 为每条规则提供独立的事务锁，串行化该规则的启动/停止/切换/故障转移操作，
+	// 避免后台 AutoFailover 与用户手动操作并发修改同一规则时产生的状态错乱。
+	ruleLocks sync.Map // map[uint]*sync.Mutex
 }
 
 // NewRuleService creates a rule service.
@@ -37,6 +42,25 @@ func NewRuleService(db *gorm.DB) *RuleService {
 		logService:    NewLogService(db),
 		tunnelService: NewTunnelService(db),
 	}
+}
+
+// lockRule 获取指定规则的事务锁，返回解锁函数。
+func (s *RuleService) lockRule(id uint) func() {
+	v, _ := s.ruleLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// tryLockRule 尝试获取规则事务锁，成功返回解锁函数与 true；
+// 若锁被占用（说明该规则正被其他操作处理）则返回 false，调用方应跳过本次操作。
+func (s *RuleService) tryLockRule(id uint) (func(), bool) {
+	v, _ := s.ruleLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	if !mu.TryLock() {
+		return nil, false
+	}
+	return mu.Unlock, true
 }
 
 // Create creates a rule.
@@ -119,6 +143,9 @@ func (s *RuleService) Create(req *dto.CreateRuleReq, userID uint, username strin
 
 // Update updates a rule.
 func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, username string, ip, userAgent string) (*model.GostRule, error) {
+	unlock := s.lockRule(id)
+	defer unlock()
+
 	rule, err := s.ruleRepo.FindByID(id)
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
@@ -126,6 +153,12 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		}
 		return nil, err
 	}
+
+	prevRule := *rule
+	prevTargets := append([]string(nil), rule.Targets...)
+	prevBackups := append([]uint(nil), rule.BackupTunnelIDs...)
+	prevRule.Targets = prevTargets
+	prevRule.BackupTunnelIDs = prevBackups
 
 	if rule.Type == model.RuleTypeTunnel && (req.TunnelID == nil || *req.TunnelID == 0) {
 		return nil, errors.ErrTunnelRequired
@@ -151,11 +184,19 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		return nil, errors.ErrRulePortExists
 	}
 
+	if rule.Type == model.RuleTypeTunnel && rule.Status == model.RuleStatusRunning {
+		if err = s.validateTunnelSwitchTarget(req.TunnelID); err != nil {
+			return nil, err
+		}
+	}
+
 	wasRunning := rule.Status == model.RuleStatusRunning
 	if wasRunning {
-		if err = s.Stop(id, userID, username, ip, userAgent); err != nil {
+		if err = s.stopCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("更新规则前停止失败: %v", err)
+			return nil, err
 		}
+		rule.Status = model.RuleStatusStopped
 	}
 
 	rule.Name = req.Name
@@ -179,15 +220,27 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		rule.BackupTunnelIDs = nil
 	}
 
-	if err = s.ruleRepo.Update(rule); err != nil {
+	if err = s.ruleRepo.UpdateConfig(rule); err != nil {
 		return nil, err
 	}
 
 	if wasRunning {
-		if err = s.Start(id, userID, username, ip, userAgent); err != nil {
+		if err = s.startCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("更新规则后重新启动失败: %v", err)
+
+			rollbackRule := prevRule
+			rollbackRule.Status = model.RuleStatusStopped
+			if rbErr := s.ruleRepo.UpdateConfig(&rollbackRule); rbErr != nil {
+				logger.Errorf("更新失败后回滚规则配置失败: %v", rbErr)
+				return nil, err
+			}
+			if restartErr := s.startCore(id, userID, username, ip, userAgent); restartErr != nil {
+				logger.Errorf("更新失败后恢复旧规则启动失败: %v", restartErr)
+				return nil, err
+			}
 			return nil, err
 		}
+		rule.Status = model.RuleStatusRunning
 	}
 
 	s.logService.Record(
@@ -204,8 +257,45 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 	return rule, nil
 }
 
+func (s *RuleService) validateTunnelSwitchTarget(tunnelID *uint) error {
+	if tunnelID == nil || *tunnelID == 0 {
+		return errors.ErrTunnelRequired
+	}
+
+	tunnel, err := s.tunnelRepo.FindByID(*tunnelID)
+	if err != nil {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.ErrTunnelNotFound
+		}
+		return err
+	}
+
+	if tunnel.Status != model.TunnelStatusRunning {
+		return errors.ErrTunnelNotRunning
+	}
+	if tunnel.ChainID == "" {
+		return errors.ErrTunnelChainNotFound
+	}
+
+	entryNode, err := s.nodeRepo.FindByID(tunnel.EntryNodeID)
+	if err != nil {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.ErrNodeNotFound
+		}
+		return err
+	}
+	if entryNode.Status == model.NodeStatusOffline {
+		return errors.ErrEntryNodeOffline
+	}
+
+	return nil
+}
+
 // Delete deletes a rule.
 func (s *RuleService) Delete(id uint, userID uint, username string, ip, userAgent string) error {
+	unlock := s.lockRule(id)
+	defer unlock()
+
 	rule, err := s.ruleRepo.FindByID(id)
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
@@ -215,7 +305,7 @@ func (s *RuleService) Delete(id uint, userID uint, username string, ip, userAgen
 	}
 
 	if rule.Status == model.RuleStatusRunning {
-		if err = s.Stop(id, userID, username, ip, userAgent); err != nil {
+		if err = s.stopCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("停止规则失败: %v", err)
 		}
 	}
@@ -284,6 +374,13 @@ func (s *RuleService) List(req *dto.RuleListReq) ([]model.GostRule, int64, error
 
 // Start starts a rule.
 func (s *RuleService) Start(id uint, userID uint, username string, ip, userAgent string) error {
+	unlock := s.lockRule(id)
+	defer unlock()
+	return s.startCore(id, userID, username, ip, userAgent)
+}
+
+// startCore 启动规则的无锁核心实现。调用方必须已持有该规则的事务锁。
+func (s *RuleService) startCore(id uint, userID uint, username string, ip, userAgent string) error {
 	rule, err := s.ruleRepo.FindByID(id)
 	if err != nil {
 		return err
@@ -355,26 +452,51 @@ func (s *RuleService) AutoFailover() {
 	}
 
 	for i := range rules {
-		rule := &rules[i]
-		selectedTunnel, err := s.selectAvailableTunnel(rule)
-		if err != nil {
-			continue
-		}
-		if rule.TunnelID != nil && *rule.TunnelID == selectedTunnel.ID {
-			continue
-		}
+		ruleID := rules[i].ID
+		s.failoverOne(ruleID)
+	}
+}
 
-		if rule.TunnelID != nil && rule.PrimaryTunnelID != nil && *rule.TunnelID != *rule.PrimaryTunnelID {
-			// 当前在备选上运行 → 切到了更优先的链路（主链路或更靠前的备选）
-			logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %d -> %d（原主链路: %d）",
-				rule.ID, rule.Name, *rule.TunnelID, selectedTunnel.ID, *rule.PrimaryTunnelID)
-		} else {
-			logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %v -> %d", rule.ID, rule.Name, rule.TunnelID, selectedTunnel.ID)
-		}
-		// 只更新 tunnel_id，不修改 primary_tunnel_id，保留用户的原始主链路选择
-		_ = s.Stop(rule.ID, 0, "system", "", "")
-		_ = s.ruleRepo.UpdateFields(&model.GostRule{}, rule.ID, map[string]any{"tunnel_id": selectedTunnel.ID})
-		_ = s.Start(rule.ID, 0, "system", "", "")
+// failoverOne 对单条规则执行一次故障转移检查与切换。
+// 通过 tryLockRule 串行化，避免与用户手动操作（启动/停止/切换/删除）并发；
+// 若该规则正被其他操作处理，则本次跳过，等待下一轮（5s）重试。
+func (s *RuleService) failoverOne(ruleID uint) {
+	unlock, ok := s.tryLockRule(ruleID)
+	if !ok {
+		return
+	}
+	defer unlock()
+
+	// 持锁后重新加载，确保基于最新状态决策（手动操作可能刚刚修改过该规则）。
+	rule, err := s.ruleRepo.FindByID(ruleID)
+	if err != nil {
+		return
+	}
+	// 仅处理仍在运行中的隧道规则。
+	if rule.Type != model.RuleTypeTunnel || rule.Status != model.RuleStatusRunning {
+		return
+	}
+
+	selectedTunnel, err := s.selectAvailableTunnel(rule)
+	if err != nil {
+		return
+	}
+	if rule.TunnelID != nil && *rule.TunnelID == selectedTunnel.ID {
+		return
+	}
+
+	if rule.TunnelID != nil && rule.PrimaryTunnelID != nil && *rule.TunnelID != *rule.PrimaryTunnelID {
+		// 当前在备选上运行 → 切到了更优先的链路（主链路或更靠前的备选）
+		logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %d -> %d（原主链路: %d）",
+			rule.ID, rule.Name, *rule.TunnelID, selectedTunnel.ID, *rule.PrimaryTunnelID)
+	} else {
+		logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %v -> %d", rule.ID, rule.Name, rule.TunnelID, selectedTunnel.ID)
+	}
+	// 只更新 tunnel_id，不修改 primary_tunnel_id，保留用户的原始主链路选择
+	_ = s.stopCore(rule.ID, 0, "system", "", "")
+	_ = s.ruleRepo.UpdateFields(&model.GostRule{}, rule.ID, map[string]any{"tunnel_id": selectedTunnel.ID})
+	if err := s.startCore(rule.ID, 0, "system", "", ""); err != nil {
+		logger.Warnf("[Failover] 规则 %d (%s) 切换后启动失败: %v", rule.ID, rule.Name, err)
 	}
 }
 
@@ -408,6 +530,13 @@ func (s *RuleService) startTunnelRule(rule *model.GostRule, client *gost.Client,
 
 // Stop stops a rule.
 func (s *RuleService) Stop(id uint, userID uint, username string, ip, userAgent string) error {
+	unlock := s.lockRule(id)
+	defer unlock()
+	return s.stopCore(id, userID, username, ip, userAgent)
+}
+
+// stopCore 停止规则的无锁核心实现。调用方必须已持有该规则的事务锁。
+func (s *RuleService) stopCore(id uint, userID uint, username string, ip, userAgent string) error {
 	rule, err := s.ruleRepo.FindByID(id)
 	if err != nil {
 		return err
@@ -589,6 +718,12 @@ func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.Gost
 		strategy = "round"
 	}
 
+	// 先清理同名旧服务，确保启动幂等：
+	// gost 的 CreateService 对已存在的同名服务会直接跳过，
+	// 若不先删除，切换隧道时会沿用旧链路（切换无效），
+	// 失败回滚时也会因端口/服务残留而无法重新拉起。
+	s.deleteRuleServices(client, serviceName)
+
 	services := gost.BuildFullForwardService(serviceName, rule.ListenPort, targets, strategy)
 
 	if chainID != "" {
@@ -599,9 +734,14 @@ func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.Gost
 
 	for _, svc := range services {
 		if err := s.setupRuleObserver(client, rule, svc); err != nil {
+			s.deleteRuleServices(client, serviceName)
+			_ = client.SaveConfig()
 			return err
 		}
 		if err := client.CreateService(svc); err != nil {
+			// 清理本次可能已部分创建的服务，避免端口残留导致后续启动/回滚失败
+			s.deleteRuleServices(client, serviceName)
+			_ = client.SaveConfig()
 			_ = s.ruleRepo.UpdateStatus(rule.ID, model.RuleStatusError)
 			return errors.ErrRuleStartFailed
 		}
@@ -612,4 +752,17 @@ func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.Gost
 	_ = s.ruleRepo.UpdateServiceID(rule.ID, serviceName)
 
 	return nil
+}
+
+// deleteRuleServices 删除某条规则在节点上的全部 gost 服务（含 -tcp/-udp 变体）。
+func (s *RuleService) deleteRuleServices(client *gost.Client, serviceName string) {
+	names := []string{serviceName}
+	if !strings.HasSuffix(serviceName, "-tcp") && !strings.HasSuffix(serviceName, "-udp") {
+		names = append(names, serviceName+"-tcp", serviceName+"-udp")
+	}
+	for _, name := range names {
+		if err := client.DeleteService(name); err != nil {
+			logger.Warnf("清理 Gost 服务 %s 失败: %v", name, err)
+		}
+	}
 }

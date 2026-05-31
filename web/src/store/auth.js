@@ -5,7 +5,14 @@ import { login as loginApi, getUserInfo as getUserInfoApi } from '@/api/auth'
 export const useAuthStore = defineStore('auth', () => {
     // 状态
     const token = ref(localStorage.getItem('token') || '')
-    const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || 'null'))
+    const userInfo = ref((() => {
+        try {
+            return JSON.parse(localStorage.getItem('userInfo') || 'null')
+        } catch {
+            localStorage.removeItem('userInfo')
+            return null
+        }
+    })())
 
     // 计算属性
     const isLoggedIn = computed(() => !!token.value)

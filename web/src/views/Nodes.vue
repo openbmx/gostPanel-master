@@ -514,7 +514,8 @@ const handleCopy = (row) => {
   
   Object.assign(form, {
     name: row.name,
-    api_url: row.api_url || '',
+    address: row.address || '',
+    port: row.port || 39000,
     username: row.username || '',
     password: row.password || '',
     remark: row.remark || ''

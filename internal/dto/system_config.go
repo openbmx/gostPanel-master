@@ -7,14 +7,17 @@ type SystemConfigResp struct {
 	Panel  PanelConfigResp  `json:"panel"`
 	Email  EmailConfigResp  `json:"email"`
 	Config PanelSettingResp `json:"config"`
+	Login  LoginProtectResp `json:"login"`
 	Log    LogConfigResp    `json:"log"`
 	Backup BackupConfigResp `json:"backup"`
 }
 
 type PublicSystemConfigResp struct {
-	SiteTitle string `json:"siteTitle"`
-	LogoURL   string `json:"logoUrl"`
-	Copyright string `json:"copyright"`
+	SiteTitle        string `json:"siteTitle"`
+	LogoURL          string `json:"logoUrl"`
+	Copyright        string `json:"copyright"`
+	TurnstileEnabled bool   `json:"turnstileEnabled"`
+	TurnstileSiteKey string `json:"turnstileSiteKey"`
 }
 
 type PanelConfigResp struct {
@@ -35,6 +38,11 @@ type PanelSettingResp struct {
 	Copyright string `json:"copyright"`
 }
 
+type LoginProtectResp struct {
+	TurnstileEnabled bool   `json:"turnstileEnabled"`
+	TurnstileSiteKey string `json:"turnstileSiteKey"`
+}
+
 type LogConfigResp struct {
 	RetentionDays int    `json:"retentionDays"`
 	Level         string `json:"level"`
@@ -50,6 +58,7 @@ type UpdateSystemConfigReq struct {
 	Panel  PanelConfigReq  `json:"panel"`
 	Email  EmailConfigReq  `json:"email"`
 	Config PanelSettingReq `json:"config"`
+	Login  LoginProtectReq `json:"login"`
 	Log    LogConfigReq    `json:"log"`
 	Backup BackupConfigReq `json:"backup"`
 }
@@ -71,6 +80,12 @@ type PanelSettingReq struct {
 	SiteTitle string `json:"siteTitle"`
 	LogoURL   string `json:"logoUrl"`
 	Copyright string `json:"copyright"`
+}
+
+type LoginProtectReq struct {
+	TurnstileEnabled   bool   `json:"turnstileEnabled"`
+	TurnstileSiteKey   string `json:"turnstileSiteKey"`
+	TurnstileSecretKey string `json:"turnstileSecretKey"`
 }
 
 type LogConfigReq struct {

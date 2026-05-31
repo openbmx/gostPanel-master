@@ -38,6 +38,10 @@ func (s *SystemConfigService) GetConfig() (*dto.SystemConfigResp, error) {
 			LogoURL:   config.LogoURL,
 			Copyright: config.Copyright,
 		},
+		Login: dto.LoginProtectResp{
+			TurnstileEnabled: config.TurnstileEnabled,
+			TurnstileSiteKey: config.TurnstileSiteKey,
+		},
 		Log: dto.LogConfigResp{
 			RetentionDays: config.LogRetentionDays,
 			Level:         config.LogLevel,
@@ -57,9 +61,11 @@ func (s *SystemConfigService) GetPublicConfig() (*dto.PublicSystemConfigResp, er
 	}
 
 	return &dto.PublicSystemConfigResp{
-		SiteTitle: config.SiteTitle,
-		LogoURL:   config.LogoURL,
-		Copyright: config.Copyright,
+		SiteTitle:        config.SiteTitle,
+		LogoURL:          config.LogoURL,
+		Copyright:        config.Copyright,
+		TurnstileEnabled: config.TurnstileEnabled,
+		TurnstileSiteKey: config.TurnstileSiteKey,
 	}, nil
 }
 
@@ -84,6 +90,10 @@ func (s *SystemConfigService) UpdateConfig(req *dto.UpdateSystemConfigReq) error
 	config.SiteTitle = req.Config.SiteTitle
 	config.LogoURL = req.Config.LogoURL
 	config.Copyright = req.Config.Copyright
+
+	config.TurnstileEnabled = req.Login.TurnstileEnabled
+	config.TurnstileSiteKey = req.Login.TurnstileSiteKey
+	config.TurnstileSecretKey = req.Login.TurnstileSecretKey
 
 	// 映射 Log
 	config.LogRetentionDays = req.Log.RetentionDays

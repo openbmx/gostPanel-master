@@ -31,6 +31,9 @@
           />
         </el-form-item>
         <el-form-item>
+          <div v-if="systemStore.turnstileEnabled && systemStore.turnstileSiteKey" ref="turnstileRef" class="turnstile-box"></div>
+        </el-form-item>
+        <el-form-item>
           <el-button
             type="primary"
             size="large"
@@ -47,7 +50,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
@@ -61,10 +64,13 @@ const systemStore = useSystemStore()
 
 const loginFormRef = ref(null)
 const loading = ref(false)
+const turnstileRef = ref(null)
+const turnstileWidgetId = ref(null)
 
 const loginForm = reactive({
   username: '',
-  password: ''
+  password: '',
+  turnstile_token: ''
 })
 
 const loginRules = {
@@ -83,6 +89,11 @@ const handleLogin = async () => {
   
   await loginFormRef.value.validate(async (valid) => {
     if (!valid) return
+
+    if (systemStore.turnstileEnabled && !loginForm.turnstile_token) {
+      ElMessage.warning('请先完成人机验证')
+      return
+    }
     
     loading.value = true
     try {
@@ -93,14 +104,76 @@ const handleLogin = async () => {
       router.push(redirect)
     } catch (error) {
       console.error('登录失败:', error)
+      resetTurnstile()
     } finally {
       loading.value = false
     }
   })
 }
 
+const loadTurnstileScript = () => {
+  return new Promise((resolve, reject) => {
+    if (window.turnstile) {
+      resolve()
+      return
+    }
+
+    const existingScript = document.querySelector('script[data-turnstile="true"]')
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(), { once: true })
+      existingScript.addEventListener('error', () => reject(new Error('Turnstile script load failed')), { once: true })
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+    script.async = true
+    script.defer = true
+    script.dataset.turnstile = 'true'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Turnstile script load failed'))
+    document.head.appendChild(script)
+  })
+}
+
+const resetTurnstile = () => {
+  loginForm.turnstile_token = ''
+  if (window.turnstile && turnstileWidgetId.value !== null) {
+    try {
+      window.turnstile.reset(turnstileWidgetId.value)
+    } catch (error) {
+      console.warn('重置 Turnstile 失败:', error)
+    }
+  }
+}
+
+const renderTurnstile = async () => {
+  if (!systemStore.turnstileEnabled || !systemStore.turnstileSiteKey) return
+
+  await loadTurnstileScript()
+  await nextTick()
+
+  if (!turnstileRef.value || !window.turnstile) return
+
+  turnstileRef.value.innerHTML = ''
+  turnstileWidgetId.value = window.turnstile.render(turnstileRef.value, {
+    sitekey: systemStore.turnstileSiteKey,
+    callback: (token) => {
+      loginForm.turnstile_token = token
+    },
+    'expired-callback': () => {
+      loginForm.turnstile_token = ''
+    },
+    'error-callback': () => {
+      loginForm.turnstile_token = ''
+    }
+  })
+}
+
 onMounted(() => {
-  systemStore.fetchSystemConfig()
+  systemStore.fetchSystemConfig().then(() => {
+    renderTurnstile()
+  })
 })
 </script>
 
@@ -141,6 +214,13 @@ onMounted(() => {
 
 .login-form {
   margin-top: 20px;
+}
+
+.turnstile-box {
+  width: 100%;
+  min-height: 65px;
+  display: flex;
+  justify-content: center;
 }
 
 .login-button {

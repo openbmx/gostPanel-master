@@ -28,12 +28,13 @@ const (
 // - 端口转发 (forward)：选择 NodeID，直接在该节点上创建转发服务
 // - 隧道转发 (tunnel)：选择 TunnelID，在隧道的入口节点上创建转发服务，使用隧道的 Chain
 type GostRule struct {
-	ID         uint     `gorm:"primaryKey" json:"id"`
-	NodeID     *uint    `gorm:"index" json:"node_id"`                         // 入口节点 ID（端口转发时使用）
-	Name       string   `gorm:"size:100;not null" json:"name"`                // 规则名称
-	Type       RuleType `gorm:"size:20;not null;default:forward" json:"type"` // 规则类型
-	TunnelID   *uint    `gorm:"index" json:"tunnel_id"`                       // 隧道 ID（隧道转发时使用）
-	ListenPort int      `gorm:"not null" json:"listen_port"`                  // 监听端口（TCP+UDP 全流量）
+	ID              uint     `gorm:"primaryKey" json:"id"`
+	NodeID          *uint    `gorm:"index" json:"node_id"`                               // 入口节点 ID（端口转发时使用）
+	Name            string   `gorm:"size:100;not null" json:"name"`                      // 规则名称
+	Type            RuleType `gorm:"size:20;not null;default:forward" json:"type"`       // 规则类型
+	TunnelID        *uint    `gorm:"index" json:"tunnel_id"`                             // 隧道 ID（隧道转发时使用）
+	BackupTunnelIDs []uint   `gorm:"type:json;serializer:json" json:"backup_tunnel_ids"` // 备选隧道 ID 列表
+	ListenPort      int      `gorm:"not null" json:"listen_port"`                        // 监听端口（TCP+UDP 全流量）
 
 	Targets   []string   `gorm:"type:json;serializer:json" json:"targets"` // 多目标列表 (host:port)
 	Strategy  string     `gorm:"size:20;default:round" json:"strategy"`    // 负载均衡策略 (round, random, fifo)

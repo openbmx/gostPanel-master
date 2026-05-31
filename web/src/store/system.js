@@ -7,6 +7,8 @@ export const useSystemStore = defineStore('system', () => {
     const siteTitle = ref(localStorage.getItem('siteTitle') || 'Gost Panel')
     const logoUrl = ref(localStorage.getItem('logoUrl') || 'https://gost.run/images/gost.png')
     const copyright = ref(localStorage.getItem('copyright') || '')
+    const turnstileEnabled = ref(false)
+    const turnstileSiteKey = ref('')
 
     // Actions
     async function fetchSystemConfig() {
@@ -34,6 +36,9 @@ export const useSystemStore = defineStore('system', () => {
                     copyright.value = config.copyright
                     localStorage.setItem('copyright', config.copyright)
                 }
+
+                turnstileEnabled.value = !!config.turnstileEnabled
+                turnstileSiteKey.value = config.turnstileSiteKey || ''
             }
         } catch (error) {
             console.error('获取系统配置失败:', error)
@@ -49,6 +54,8 @@ export const useSystemStore = defineStore('system', () => {
         siteTitle,
         logoUrl,
         copyright,
+        turnstileEnabled,
+        turnstileSiteKey,
         fetchSystemConfig
     }
 })

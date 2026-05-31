@@ -149,7 +149,7 @@
         </el-form-item>
         <!-- 隧道转发：选择隧道 -->
         <el-form-item v-if="form.type === 'tunnel'" label="选择隧道" prop="tunnel_id">
-          <el-select v-model="form.tunnel_id" placeholder="请选择隧道" style="width: 100%" :disabled="isEdit">
+          <el-select v-model="form.tunnel_id" placeholder="请选择隧道" style="width: 100%">
             <el-option 
               v-for="tunnel in tunnelList" 
               :key="tunnel.id" 
@@ -158,6 +158,17 @@
             />
           </el-select>
           <div class="form-hint">在隧道的入口节点上创建转发服务，流量通过隧道链路转发</div>
+        </el-form-item>
+        <el-form-item v-if="form.type === 'tunnel'" label="备选隧道" prop="backup_tunnel_ids">
+          <el-select v-model="form.backup_tunnel_ids" multiple clearable placeholder="可选，选择可自动切换的备选隧道" style="width: 100%">
+            <el-option 
+              v-for="tunnel in tunnelList" 
+              :key="tunnel.id" 
+              :label="`${tunnel.name} (${tunnel.entry_node?.name || '-'} → ${tunnel.exit_node?.name || '-'})`" 
+              :value="tunnel.id" 
+            />
+          </el-select>
+          <div class="form-hint">主隧道不可用时，会优先切换到这里配置的备选隧道</div>
         </el-form-item>
         <el-form-item label="监听端口" prop="listen_port">
           <el-input-number v-model="form.listen_port" :min="1" :max="65535" controls-position="right" style="width: 100%" />
@@ -243,6 +254,7 @@ const form = reactive({
   type: 'forward',
   node_id: '',
   tunnel_id: null,
+  backup_tunnel_ids: [],
   name: '',
   listen_port: 0,
   targetList: [{ address: '' }],
@@ -265,6 +277,7 @@ const formRules = {
   type: [{ required: true, message: '请选择规则类型', trigger: 'change' }],
   node_id: [{ validator: validateEntry, trigger: 'change' }],
   tunnel_id: [{ validator: validateEntry, trigger: 'change' }],
+  backup_tunnel_ids: [{ validator: validateEntry, trigger: 'change' }],
   name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }],
   listen_port: [{ required: true, message: '请输入监听端口', trigger: 'blur' }]
 }
@@ -352,6 +365,7 @@ const openDialog = (row = null) => {
       type: row.type || 'forward',
       node_id: row.node_id,
       tunnel_id: row.tunnel_id || null,
+      backup_tunnel_ids: row.backup_tunnel_ids || [],
       name: row.name,
       listen_port: row.listen_port,
       targetList: tList.length > 0 ? tList : [{ address: '' }],
@@ -363,6 +377,7 @@ const openDialog = (row = null) => {
       type: 'forward',
       node_id: '',
       tunnel_id: null,
+      backup_tunnel_ids: [],
       name: '',
       listen_port: 8000,
       targetList: [{ address: '' }],
@@ -390,6 +405,7 @@ const handleSubmit = async () => {
         type: form.type,
         node_id: form.type === 'forward' ? form.node_id : null,
         tunnel_id: form.type === 'tunnel' ? form.tunnel_id : null,
+        backup_tunnel_ids: form.type === 'tunnel' ? form.backup_tunnel_ids : [],
         name: form.name,
         listen_port: form.listen_port,
         targets: targets,
@@ -488,6 +504,7 @@ const removeTarget = (index) => {
 const handleTypeChange = (val) => {
   if (val === 'forward') {
     form.tunnel_id = null
+    form.backup_tunnel_ids = []
   } else {
     form.node_id = ''
   }

@@ -35,6 +35,11 @@ type SystemConfig struct {
 	SiteTitle string `gorm:"size:100;default:Gost Panel" json:"site_title"`
 	LogoURL   string `gorm:"size:255" json:"logo_url"`
 	Copyright string `gorm:"size:255" json:"copyright"`
+
+	// 登录防护
+	TurnstileEnabled   bool   `gorm:"default:false" json:"turnstile_enabled"`
+	TurnstileSiteKey   string `gorm:"size:255" json:"turnstile_site_key"`
+	TurnstileSecretKey string `gorm:"size:255" json:"turnstile_secret_key"`
 }
 
 // TableName 指定表名

@@ -198,6 +198,7 @@ func initSystemConfig(db *gorm.DB) error {
 			LogLevel:             "info",
 			AutoBackup:           false,
 			BackupRetentionCount: 7,
+			TurnstileEnabled:     false,
 		}
 		if err := db.Create(sysConfig).Error; err != nil {
 			return err

@@ -30,6 +30,24 @@
           </el-form>
         </el-tab-pane>
 
+        <!-- 登录防护 -->
+        <el-tab-pane label="登录防护" name="login">
+          <el-form ref="loginFormRef" :model="loginForm" label-width="120px" class="setting-form">
+            <el-form-item label="启用 Turnstile" prop="turnstileEnabled">
+              <el-switch v-model="loginForm.turnstileEnabled" />
+            </el-form-item>
+            <el-form-item label="Site Key" prop="turnstileSiteKey">
+              <el-input v-model="loginForm.turnstileSiteKey" placeholder="请输入 Cloudflare Turnstile Site Key" />
+            </el-form-item>
+            <el-form-item label="Secret Key" prop="turnstileSecretKey">
+              <el-input v-model="loginForm.turnstileSecretKey" type="password" show-password placeholder="请输入 Cloudflare Turnstile Secret Key" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="loading" @click="handleSave('login')">保存设置</el-button>
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+
         <!-- 邮箱配置 -->
         <el-tab-pane label="邮箱配置" name="email">
           <el-form ref="emailFormRef" :model="emailForm" label-width="120px" class="setting-form">
@@ -117,6 +135,12 @@ const emailForm = reactive({
   fromEmail: ''
 })
 
+const loginForm = reactive({
+  turnstileEnabled: false,
+  turnstileSiteKey: '',
+  turnstileSecretKey: ''
+})
+
 const configForm = reactive({
   panelUrl: '',
   siteTitle: 'Gost Panel',
@@ -138,12 +162,13 @@ const fetchConfig = async () => {
         const res = await getSystemConfig()
         if (res.data) {
             // 根据后端返回的数据结构填充表单
-            const { panel, email, config, backup } = res.data
+          const { panel, email, config, login, backup } = res.data
             if (panel) {
                 configForm.panelUrl = panel.panelUrl
             }
             if (email) Object.assign(emailForm, email)
             if (config) Object.assign(configForm, config)
+          if (login) Object.assign(loginForm, login)
             if (backup) Object.assign(backupForm, backup)
         }
     } catch (error) {
@@ -167,6 +192,7 @@ const handleSave = async (type) => {
                 logoUrl: configForm.logoUrl,
                 copyright: configForm.copyright
             },
+            login: loginForm,
             backup: backupForm
         }
         

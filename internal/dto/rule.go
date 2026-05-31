@@ -7,11 +7,12 @@ package dto
 // - 端口转发 (forward)：NodeID 必填，直接在该节点上创建转发服务
 // - 隧道转发 (tunnel)：TunnelID 必填，在隧道的入口节点上创建转发服务
 type CreateRuleReq struct {
-	NodeID     *uint  `json:"node_id"`                                        // 入口节点 ID（端口转发时必填）
-	TunnelID   *uint  `json:"tunnel_id"`                                      // 隧道 ID（隧道转发时必填）
-	Name       string `json:"name" binding:"required,min=1,max=100"`          // 规则名称
-	Type       string `json:"type" binding:"required,oneof=forward tunnel"`   // 规则类型
-	ListenPort int    `json:"listen_port" binding:"required,min=1,max=65535"` // 监听端口（TCP+UDP 全流量）
+	NodeID          *uint  `json:"node_id"`                                        // 入口节点 ID（端口转发时必填）
+	TunnelID        *uint  `json:"tunnel_id"`                                      // 隧道 ID（隧道转发时必填）
+	BackupTunnelIDs []uint `json:"backup_tunnel_ids"`                              // 备选隧道 ID 列表
+	Name            string `json:"name" binding:"required,min=1,max=100"`          // 规则名称
+	Type            string `json:"type" binding:"required,oneof=forward tunnel"`   // 规则类型
+	ListenPort      int    `json:"listen_port" binding:"required,min=1,max=65535"` // 监听端口（TCP+UDP 全流量）
 
 	Targets   []string `json:"targets"`                                                 // 多目标列表
 	Strategy  string   `json:"strategy" binding:"omitempty,oneof=round rand fifo hash"` // 负载均衡策略
@@ -22,8 +23,10 @@ type CreateRuleReq struct {
 
 // UpdateRuleReq 更新规则请求
 type UpdateRuleReq struct {
-	Name       string `json:"name" binding:"required,min=1,max=100"`          // 规则名称
-	ListenPort int    `json:"listen_port" binding:"required,min=1,max=65535"` // 监听端口（TCP+UDP 全流量）
+	TunnelID        *uint  `json:"tunnel_id"`                                      // 隧道 ID（隧道转发时可切换）
+	BackupTunnelIDs []uint `json:"backup_tunnel_ids"`                              // 备选隧道 ID 列表
+	Name            string `json:"name" binding:"required,min=1,max=100"`          // 规则名称
+	ListenPort      int    `json:"listen_port" binding:"required,min=1,max=65535"` // 监听端口（TCP+UDP 全流量）
 
 	Targets   []string `json:"targets"`                                                 // 多目标列表
 	Strategy  string   `json:"strategy" binding:"omitempty,oneof=round rand fifo hash"` // 负载均衡策略

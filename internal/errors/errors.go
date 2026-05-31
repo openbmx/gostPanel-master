@@ -64,6 +64,8 @@ var (
 	ErrRuleTypeInvalid = New(10108, "无效的规则类型", http.StatusBadRequest)
 	// ErrTunnelChainNotFound 隧道链不存在
 	ErrTunnelChainNotFound = New(10109, "隧道未启动或链路不存在", http.StatusBadRequest)
+	// ErrTunnelFailoverUnavailable 隧道及备选隧道均不可用
+	ErrTunnelFailoverUnavailable = New(10110, "当前隧道及备选隧道均不可用", http.StatusBadRequest)
 )
 
 // ==================== 隧道相关错误 (102xx) ====================
@@ -122,6 +124,8 @@ var (
 var (
 	// ErrTokenGenerationFailed Token 生成失败
 	ErrTokenGenerationFailed = New(10306, "Token 生成失败", http.StatusInternalServerError)
+	// ErrTurnstileVerificationFailed Turnstile 验证失败
+	ErrTurnstileVerificationFailed = New(10307, "人机验证失败，请刷新后重试", http.StatusUnauthorized)
 )
 
 // ==================== 系统/配置相关错误 (104xx) ====================

@@ -4,8 +4,9 @@ package dto
 
 // LoginReq 登录请求
 type LoginReq struct {
-	Username string `json:"username" binding:"required"` // 用户名
-	Password string `json:"password" binding:"required"` // 密码
+	Username       string `json:"username" binding:"required"` // 用户名
+	Password       string `json:"password" binding:"required"` // 密码
+	TurnstileToken string `json:"turnstile_token"`             // Turnstile 验证令牌
 }
 
 // LoginResp 登录响应

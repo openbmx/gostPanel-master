@@ -16,21 +16,23 @@ import (
 // RuleSyncService 规则状态同步服务
 // 定时从 Gost 节点同步规则的真实运行状态
 type RuleSyncService struct {
-	nodeRepo   *repository.NodeRepository
-	ruleRepo   *repository.RuleRepository
-	tunnelRepo *repository.TunnelRepository
-	ticker     *time.Ticker
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
+	nodeRepo    *repository.NodeRepository
+	ruleRepo    *repository.RuleRepository
+	tunnelRepo  *repository.TunnelRepository
+	ruleService *RuleService
+	ticker      *time.Ticker
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
 }
 
 // NewRuleSyncService 创建规则状态同步服务
 func NewRuleSyncService(db *gorm.DB) *RuleSyncService {
 	return &RuleSyncService{
-		nodeRepo:   repository.NewNodeRepository(db),
-		ruleRepo:   repository.NewRuleRepository(db),
-		tunnelRepo: repository.NewTunnelRepository(db),
-		stopChan:   make(chan struct{}),
+		nodeRepo:    repository.NewNodeRepository(db),
+		ruleRepo:    repository.NewRuleRepository(db),
+		tunnelRepo:  repository.NewTunnelRepository(db),
+		ruleService: NewRuleService(db),
+		stopChan:    make(chan struct{}),
 	}
 }
 
@@ -79,6 +81,8 @@ func (s *RuleSyncService) syncAll() {
 		// 并发同步每个节点
 		go s.syncNodeRules(node)
 	}
+
+	s.ruleService.AutoFailover()
 }
 
 // syncNodeRules 同步单个节点的规则

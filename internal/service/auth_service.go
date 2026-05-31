@@ -2,7 +2,11 @@
 package service
 
 import (
+	"encoding/json"
 	stderrors "errors"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"gost-panel/internal/dto"
@@ -19,6 +23,7 @@ import (
 // 负责用户登录、Token 管理和密码修改
 type AuthService struct {
 	userRepo   *repository.UserRepository
+	sysRepo    *repository.SystemConfigRepository
 	logService *LogService
 	jwt        *jwt.JWT
 }
@@ -27,6 +32,7 @@ type AuthService struct {
 func NewAuthService(db *gorm.DB, jwtCfg *jwt.Config) *AuthService {
 	return &AuthService{
 		userRepo:   repository.NewUserRepository(db),
+		sysRepo:    repository.NewSystemConfigRepository(db),
 		logService: NewLogService(db),
 		jwt:        jwt.New(jwtCfg),
 	}
@@ -41,6 +47,10 @@ type LoginResponse struct {
 
 // Login 用户登录
 func (s *AuthService) Login(req *dto.LoginReq, ip, userAgent string) (*LoginResponse, error) {
+	if err := s.verifyTurnstile(req.TurnstileToken); err != nil {
+		return nil, err
+	}
+
 	// 查询用户
 	user, err := s.userRepo.FindByUsername(req.Username)
 	if err != nil {
@@ -79,6 +89,53 @@ func (s *AuthService) Login(req *dto.LoginReq, ip, userAgent string) (*LoginResp
 		ExpireAt: time.Now().Add(time.Duration(s.jwt.ExpireSeconds()) * time.Second).Unix(),
 		User:     user,
 	}, nil
+}
+
+func (s *AuthService) verifyTurnstile(token string) error {
+	config, err := s.sysRepo.Get()
+	if err != nil {
+		return err
+	}
+	if !config.TurnstileEnabled {
+		return nil
+	}
+	if strings.TrimSpace(config.TurnstileSecretKey) == "" || strings.TrimSpace(token) == "" {
+		return errors.ErrTurnstileVerificationFailed
+	}
+
+	form := url.Values{}
+	form.Set("secret", config.TurnstileSecretKey)
+	form.Set("response", token)
+
+	req, err := http.NewRequest(http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(form.Encode()))
+	if err != nil {
+		logger.Errorf("创建 Turnstile 验证请求失败: %v", err)
+		return errors.ErrTurnstileVerificationFailed
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Errorf("Turnstile 验证请求失败: %v", err)
+		return errors.ErrTurnstileVerificationFailed
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success    bool     `json:"success"`
+		ErrorCodes []string `json:"error-codes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Errorf("解析 Turnstile 验证响应失败: %v", err)
+		return errors.ErrTurnstileVerificationFailed
+	}
+	if resp.StatusCode != http.StatusOK || !result.Success {
+		logger.Warnf("Turnstile 验证失败: status=%d, errors=%v", resp.StatusCode, result.ErrorCodes)
+		return errors.ErrTurnstileVerificationFailed
+	}
+
+	return nil
 }
 
 // ChangePassword 修改密码

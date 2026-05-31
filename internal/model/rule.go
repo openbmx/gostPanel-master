@@ -32,8 +32,9 @@ type GostRule struct {
 	NodeID          *uint    `gorm:"index" json:"node_id"`                               // 入口节点 ID（端口转发时使用）
 	Name            string   `gorm:"size:100;not null" json:"name"`                      // 规则名称
 	Type            RuleType `gorm:"size:20;not null;default:forward" json:"type"`       // 规则类型
-	TunnelID        *uint    `gorm:"index" json:"tunnel_id"`                             // 隧道 ID（隧道转发时使用）
-	BackupTunnelIDs []uint   `gorm:"type:json;serializer:json" json:"backup_tunnel_ids"` // 备选隧道 ID 列表
+	TunnelID        *uint    `gorm:"index" json:"tunnel_id"`                             // 当前生效隧道 ID（可能被自动切换为备选）
+	PrimaryTunnelID *uint    `gorm:"index" json:"primary_tunnel_id"`                     // 用户指定的主隧道 ID（优先级最高）
+	BackupTunnelIDs []uint   `gorm:"type:json;serializer:json" json:"backup_tunnel_ids"` // 备选隧道 ID 列表（按顺序尝试）
 	ListenPort      int      `gorm:"not null" json:"listen_port"`                        // 监听端口（TCP+UDP 全流量）
 
 	Targets   []string   `gorm:"type:json;serializer:json" json:"targets"` // 多目标列表 (host:port)

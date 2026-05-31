@@ -86,6 +86,7 @@ func (s *RuleService) Create(req *dto.CreateRuleReq, userID uint, username strin
 	rule := &model.GostRule{
 		NodeID:          req.NodeID,
 		TunnelID:        req.TunnelID,
+		PrimaryTunnelID: req.TunnelID, // 记录用户指定的主链路，切换备选时不覆盖此字段
 		BackupTunnelIDs: req.BackupTunnelIDs,
 		Name:            req.Name,
 		Type:            model.RuleType(req.Type),
@@ -166,6 +167,7 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 
 	if rule.Type == model.RuleTypeTunnel {
 		rule.TunnelID = req.TunnelID
+		rule.PrimaryTunnelID = req.TunnelID // 用户主动修改 → 同步更新主链路记录
 		backupTunnelIDs, err := s.normalizeBackupTunnelIDs(req.TunnelID, req.BackupTunnelIDs)
 		if err != nil {
 			return nil, err
@@ -173,6 +175,7 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		rule.BackupTunnelIDs = backupTunnelIDs
 	} else {
 		rule.TunnelID = nil
+		rule.PrimaryTunnelID = nil
 		rule.BackupTunnelIDs = nil
 	}
 
@@ -361,7 +364,14 @@ func (s *RuleService) AutoFailover() {
 			continue
 		}
 
-		logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %v -> %d", rule.ID, rule.Name, rule.TunnelID, selectedTunnel.ID)
+		if rule.TunnelID != nil && rule.PrimaryTunnelID != nil && *rule.TunnelID != *rule.PrimaryTunnelID {
+			// 当前在备选上运行 → 切到了更优先的链路（主链路或更靠前的备选）
+			logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %d -> %d（原主链路: %d）",
+				rule.ID, rule.Name, *rule.TunnelID, selectedTunnel.ID, *rule.PrimaryTunnelID)
+		} else {
+			logger.Infof("[Failover] 规则 %d (%s) 切换隧道: %v -> %d", rule.ID, rule.Name, rule.TunnelID, selectedTunnel.ID)
+		}
+		// 只更新 tunnel_id，不修改 primary_tunnel_id，保留用户的原始主链路选择
 		_ = s.Stop(rule.ID, 0, "system", "", "")
 		_ = s.ruleRepo.UpdateFields(&model.GostRule{}, rule.ID, map[string]any{"tunnel_id": selectedTunnel.ID})
 		_ = s.Start(rule.ID, 0, "system", "", "")
@@ -505,14 +515,29 @@ func (s *RuleService) normalizeBackupTunnelIDs(primaryID *uint, backupIDs []uint
 }
 
 func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTunnel, error) {
-	if rule.TunnelID != nil {
-		if tunnel, err := s.tunnelRepo.FindByID(*rule.TunnelID); err == nil && s.isTunnelUsable(tunnel) {
-			return tunnel, nil
+	// 优先级：① 用户指定的主链路 → ② 当前生效链路（若与主链路不同）→ ③ 备选列表
+	// 这样当主链路恢复时，下次巡检会自动切回主链路。
+	seen := make(map[uint]bool)
+
+	var candidates []*uint
+	if rule.PrimaryTunnelID != nil {
+		candidates = append(candidates, rule.PrimaryTunnelID)
+		seen[*rule.PrimaryTunnelID] = true
+	}
+	if rule.TunnelID != nil && !seen[*rule.TunnelID] {
+		candidates = append(candidates, rule.TunnelID)
+		seen[*rule.TunnelID] = true
+	}
+	for i := range rule.BackupTunnelIDs {
+		id := rule.BackupTunnelIDs[i]
+		if !seen[id] {
+			candidates = append(candidates, &id)
+			seen[id] = true
 		}
 	}
 
-	for _, backupID := range rule.BackupTunnelIDs {
-		tunnel, err := s.tunnelRepo.FindByID(backupID)
+	for _, tunnelID := range candidates {
+		tunnel, err := s.tunnelRepo.FindByID(*tunnelID)
 		if err != nil {
 			continue
 		}

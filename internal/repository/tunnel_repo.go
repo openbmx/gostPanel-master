@@ -92,22 +92,62 @@ func (r *TunnelRepository) CountAll() (int64, error) {
 // FindByNodeID 查找节点相关的隧道
 func (r *TunnelRepository) FindByNodeID(nodeID uint) ([]model.GostTunnel, error) {
 	var tunnels []model.GostTunnel
-	err := r.DB.Where("entry_node_id = ? OR exit_node_id = ?", nodeID, nodeID).Find(&tunnels).Error
-	return tunnels, err
+	if err := r.DB.Find(&tunnels).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]model.GostTunnel, 0, len(tunnels))
+	for _, tunnel := range tunnels {
+		if tunnel.UsesNode(nodeID) {
+			result = append(result, tunnel)
+		}
+	}
+	return result, nil
 }
 
 // StopByNodeID 停止与该节点相关的所有隧道
 func (r *TunnelRepository) StopByNodeID(nodeID uint) error {
+	tunnels, err := r.FindByNodeID(nodeID)
+	if err != nil {
+		return err
+	}
+
+	ids := make([]uint, 0, len(tunnels))
+	for _, tunnel := range tunnels {
+		if tunnel.Status == model.TunnelStatusRunning {
+			ids = append(ids, tunnel.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
 	return r.DB.Model(&model.GostTunnel{}).
-		Where("(entry_node_id = ? OR exit_node_id = ?) AND status = ?", nodeID, nodeID, model.TunnelStatusRunning).
+		Where("id IN ?", ids).
 		Update("status", model.TunnelStatusStopped).Error
 }
 
 // HasRulesUsingTunnel 检查是否有规则正在使用该隧道
 func (r *TunnelRepository) HasRulesUsingTunnel(tunnelID uint) (bool, error) {
-	var count int64
-	err := r.DB.Model(&model.GostRule{}).Where("tunnel_id = ?", tunnelID).Count(&count).Error
-	return count > 0, err
+	var rules []model.GostRule
+	if err := r.DB.Find(&rules).Error; err != nil {
+		return false, err
+	}
+
+	for _, rule := range rules {
+		if rule.TunnelID != nil && *rule.TunnelID == tunnelID {
+			return true, nil
+		}
+		if rule.PrimaryTunnelID != nil && *rule.PrimaryTunnelID == tunnelID {
+			return true, nil
+		}
+		for _, backupID := range rule.BackupTunnelIDs {
+			if backupID == tunnelID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // HasRules 检查隧道是否被规则使用（别名方法）

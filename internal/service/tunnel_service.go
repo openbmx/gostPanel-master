@@ -1,4 +1,3 @@
-// Package service 提供业务逻辑层服务
 package service
 
 import (
@@ -16,9 +15,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// TunnelService 隧道服务
-// 负责隧道的 CRUD 操作及启停控制
-// 启动隧道时：在出口节点创建 Relay 服务，在入口节点创建 Chain 连接到出口节点
 type TunnelService struct {
 	tunnelRepo *repository.TunnelRepository
 	nodeRepo   *repository.NodeRepository
@@ -26,7 +22,6 @@ type TunnelService struct {
 	sysRepo    *repository.SystemConfigRepository
 }
 
-// NewTunnelService 创建隧道服务
 func NewTunnelService(db *gorm.DB) *TunnelService {
 	return &TunnelService{
 		tunnelRepo: repository.NewTunnelRepository(db),
@@ -36,14 +31,7 @@ func NewTunnelService(db *gorm.DB) *TunnelService {
 	}
 }
 
-// Create 创建隧道
 func (s *TunnelService) Create(req *dto.CreateTunnelReq, userID uint, username string, ip, userAgent string) (*model.GostTunnel, error) {
-	// 检查入口和出口是否相同
-	if req.EntryNodeID == req.ExitNodeID {
-		return nil, errors.ErrTunnelNodeSame
-	}
-
-	// 检查入口节点是否存在
 	entryNode, err := s.nodeRepo.FindByID(req.EntryNodeID)
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
@@ -52,31 +40,29 @@ func (s *TunnelService) Create(req *dto.CreateTunnelReq, userID uint, username s
 		return nil, err
 	}
 
-	// 检查出口节点是否存在
-	exitNode, err := s.nodeRepo.FindByID(req.ExitNodeID)
+	hops, err := s.normalizeCreateTunnelHops(req)
 	if err != nil {
-		if stderrors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.ErrExitNodeNotFound
-		}
+		return nil, err
+	}
+	exitNode, err := s.nodeRepo.FindByID(hops[len(hops)-1].NodeID)
+	if err != nil {
 		return nil, err
 	}
 
-	// 创建隧道
 	tunnel := &model.GostTunnel{
 		Name:        req.Name,
 		EntryNodeID: req.EntryNodeID,
-		ExitNodeID:  req.ExitNodeID,
-		Protocol:    req.Protocol,
-		RelayPort:   req.RelayPort,
 		Remark:      req.Remark,
 		Status:      model.TunnelStatusStopped,
+	}
+	if err = mirrorTunnelLastHop(tunnel, hops); err != nil {
+		return nil, err
 	}
 
 	if err = s.tunnelRepo.Create(tunnel); err != nil {
 		return nil, err
 	}
 
-	// 记录操作日志
 	s.logService.Record(
 		userID,
 		username,
@@ -91,7 +77,6 @@ func (s *TunnelService) Create(req *dto.CreateTunnelReq, userID uint, username s
 	return tunnel, nil
 }
 
-// Update 更新隧道（仅支持更新非运行中的隧道，且不能修改入口/出口节点）
 func (s *TunnelService) Update(id uint, req *dto.UpdateTunnelReq, userID uint, username string, ip, userAgent string) (*model.GostTunnel, error) {
 	tunnel, err := s.tunnelRepo.FindByID(id)
 	if err != nil {
@@ -100,17 +85,20 @@ func (s *TunnelService) Update(id uint, req *dto.UpdateTunnelReq, userID uint, u
 		}
 		return nil, err
 	}
-
-	// 检查是否在运行中
 	if tunnel.Status == model.TunnelStatusRunning {
 		return nil, errors.ErrTunnelRunning
 	}
 
-	// 更新隧道（不能修改入口/出口节点）
+	hops, err := s.normalizeUpdateTunnelHops(tunnel.EntryNodeID, req, tunnel.EffectiveHops())
+	if err != nil {
+		return nil, err
+	}
+
 	tunnel.Name = req.Name
-	tunnel.Protocol = req.Protocol
-	tunnel.RelayPort = req.RelayPort
 	tunnel.Remark = req.Remark
+	if err = mirrorTunnelLastHop(tunnel, hops); err != nil {
+		return nil, err
+	}
 
 	if err = s.tunnelRepo.Update(tunnel); err != nil {
 		return nil, err
@@ -129,8 +117,6 @@ func (s *TunnelService) Update(id uint, req *dto.UpdateTunnelReq, userID uint, u
 	return tunnel, nil
 }
 
-// Delete 删除隧道
-// 如果有规则正在使用此隧道，不允许删除
 func (s *TunnelService) Delete(id uint, userID uint, username string, ip, userAgent string) error {
 	tunnel, err := s.tunnelRepo.FindByID(id)
 	if err != nil {
@@ -140,7 +126,6 @@ func (s *TunnelService) Delete(id uint, userID uint, username string, ip, userAg
 		return err
 	}
 
-	// 检查是否有规则正在使用此隧道
 	hasRules, err := s.tunnelRepo.HasRules(id)
 	if err != nil {
 		return err
@@ -149,14 +134,12 @@ func (s *TunnelService) Delete(id uint, userID uint, username string, ip, userAg
 		return errors.ErrTunnelHasRules
 	}
 
-	// 如果隧道正在运行，先停止
 	if tunnel.Status == model.TunnelStatusRunning {
 		if err = s.Stop(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("停止隧道失败: %v", err)
 		}
 	}
 
-	// 删除隧道
 	if err = s.tunnelRepo.Delete(id); err != nil {
 		return err
 	}
@@ -175,7 +158,6 @@ func (s *TunnelService) Delete(id uint, userID uint, username string, ip, userAg
 	return nil
 }
 
-// GetByID 获取隧道详情
 func (s *TunnelService) GetByID(id uint) (*model.GostTunnel, error) {
 	tunnel, err := s.tunnelRepo.FindByID(id)
 	if err != nil {
@@ -187,149 +169,119 @@ func (s *TunnelService) GetByID(id uint) (*model.GostTunnel, error) {
 	return tunnel, nil
 }
 
-// List 获取隧道列表
 func (s *TunnelService) List(req *dto.TunnelListReq) ([]model.GostTunnel, int64, error) {
 	req.SetDefaults()
 
 	opt := &repository.QueryOption{
-		Pagination: &repository.Pagination{
-			Page:     req.Page,
-			PageSize: req.PageSize,
-		},
 		Conditions: make(map[string]any),
 	}
-
-	if req.NodeID > 0 {
-		opt.Conditions["entry_node_id = ? OR exit_node_id = ?"] = []interface{}{req.NodeID, req.NodeID}
+	if req.NodeID == 0 {
+		opt.Pagination = &repository.Pagination{
+			Page:     req.Page,
+			PageSize: req.PageSize,
+		}
 	}
+
 	if req.Status != "" {
 		opt.Conditions["status = ?"] = req.Status
 	}
 	if req.Keyword != "" {
-		opt.Conditions["name LIKE ?"] = []interface{}{
-			"%" + req.Keyword + "%",
-		}
+		opt.Conditions["name LIKE ?"] = []interface{}{"%" + req.Keyword + "%"}
 	}
 
-	return s.tunnelRepo.List(opt)
+	tunnels, total, err := s.tunnelRepo.List(opt)
+	if err != nil || req.NodeID == 0 {
+		return tunnels, total, err
+	}
+
+	filtered := make([]model.GostTunnel, 0, len(tunnels))
+	for _, tunnel := range tunnels {
+		if tunnel.UsesNode(req.NodeID) {
+			filtered = append(filtered, tunnel)
+		}
+	}
+	total = int64(len(filtered))
+	start := (req.Page - 1) * req.PageSize
+	if start >= len(filtered) {
+		return []model.GostTunnel{}, total, nil
+	}
+	end := start + req.PageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[start:end], total, nil
 }
 
-// Start 启动隧道
-// 在出口节点创建 Relay 服务，在入口节点创建 Chain 连接到出口节点
 func (s *TunnelService) Start(id uint, userID uint, username string, ip, userAgent string) error {
 	tunnel, err := s.tunnelRepo.FindByID(id)
 	if err != nil {
 		return err
 	}
-
-	// 已在运行中则跳过
 	if tunnel.Status == model.TunnelStatusRunning {
 		return nil
 	}
 
-	// 获取入口和出口节点
 	entryNode, err := s.nodeRepo.FindByID(tunnel.EntryNodeID)
 	if err != nil {
 		return errors.ErrEntryNodeNotFound
 	}
-	exitNode, err := s.nodeRepo.FindByID(tunnel.ExitNodeID)
-	if err != nil {
-		return errors.ErrExitNodeNotFound
-	}
-
-	// 检查节点状态
 	if entryNode.Status == model.NodeStatusOffline {
 		return errors.ErrEntryNodeOffline
 	}
-	if exitNode.Status == model.NodeStatusOffline {
-		return errors.ErrExitNodeOffline
-	}
 
-	// 步骤1：在出口节点创建 Relay 服务
-	exitClient := utils.GetGostClient(exitNode)
-	relayServiceName := fmt.Sprintf("relay-tunnel-%d", tunnel.ID)
-
-	relaySvc := &gost.ServiceConfig{
-		Name: relayServiceName,
-		Addr: fmt.Sprintf(":%d", tunnel.RelayPort),
-		Handler: &gost.HandlerConfig{
-			Type: "relay",
-		},
-		Listener: &gost.ListenerConfig{
-			Type: tunnel.Protocol,
-		},
-	}
-
-	// 配置观察器用于流量统计
-	observerName, _ := EnsureGlobalObserver(exitClient, s.sysRepo)
-	if observerName != "" {
-		relaySvc.Observer = observerName
-		if relaySvc.Metadata == nil {
-			relaySvc.Metadata = make(map[string]any)
+	hops := tunnel.EffectiveHops()
+	nodes := make(map[uint]*model.GostNode, len(hops))
+	for _, hop := range hops {
+		node, err := s.nodeRepo.FindByID(hop.NodeID)
+		if err != nil {
+			return errors.ErrExitNodeNotFound
 		}
-		relaySvc.Metadata["enableStats"] = true
-		relaySvc.Metadata["observer.period"] = "5s"
-		relaySvc.Metadata["observer.resetTraffic"] = false // 使用累计模式，避免流量丢失
+		if node.Status == model.NodeStatusOffline {
+			return errors.ErrExitNodeOffline
+		}
+		nodes[hop.NodeID] = node
 	}
 
-	if err = exitClient.CreateService(relaySvc); err != nil {
+	plan, err := buildTunnelRuntimePlan(tunnel, nodes)
+	if err != nil {
 		_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
-		return errors.ErrTunnelRelayCreateFailed
+		return err
 	}
 
-	// 保存出口节点配置
-	_ = exitClient.SaveConfig()
+	createdRelays := make([]tunnelRelayPlan, 0, len(plan.Relays))
+	for _, relay := range plan.Relays {
+		node := nodes[relay.NodeID]
+		client := utils.GetGostClient(node)
+		if relay.EnableStats {
+			s.configureTunnelRelayObserver(client, relay.Service)
+		}
+		if err = client.CreateService(relay.Service); err != nil {
+			s.rollbackTunnelStart(entryNode, nodes, plan.Chain.Name, createdRelays)
+			_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
+			return errors.ErrTunnelRelayCreateFailed
+		}
+		if err = client.SaveConfig(); err != nil {
+			s.rollbackTunnelStart(entryNode, nodes, plan.Chain.Name, append(createdRelays, relay))
+			_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
+			return err
+		}
+		createdRelays = append(createdRelays, relay)
+	}
 
-	// 步骤2：在入口节点创建 Chain 连接到出口节点的 Relay 服务
 	entryClient := utils.GetGostClient(entryNode)
-
-	// 从出口节点配置中获取主机 IP
-	exitHost := exitNode.Address
-	if exitHost == "" {
-		// 回滚：删除出口节点的 Relay 服务
-		_ = exitClient.DeleteService(relayServiceName)
-		_ = exitClient.SaveConfig()
-		_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
-		return errors.ErrExtractHostFailed
-	}
-
-	chainName := fmt.Sprintf("tunnel-%d-chain", tunnel.ID)
-	relayAddr := fmt.Sprintf("%s:%d", exitHost, tunnel.RelayPort)
-
-	chain := &gost.ChainConfig{
-		Name: chainName,
-		Hops: []*gost.HopConfig{
-			{
-				Name: "hop-0",
-				Nodes: []*gost.NodeConfig{
-					{
-						Name: "exit-relay",
-						Addr: relayAddr,
-						Connector: &gost.ConnectorConfig{
-							Type: "relay",
-						},
-						Dialer: &gost.DialerConfig{
-							Type: tunnel.Protocol,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if err = entryClient.CreateChain(chain); err != nil {
-		// 回滚：删除出口节点的 Relay 服务
-		_ = exitClient.DeleteService(relayServiceName)
-		_ = exitClient.SaveConfig()
+	if err = entryClient.CreateChain(plan.Chain); err != nil {
+		s.rollbackTunnelStart(entryNode, nodes, plan.Chain.Name, createdRelays)
 		_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
 		return errors.ErrTunnelChainCreateFailed
 	}
+	if err = entryClient.SaveConfig(); err != nil {
+		s.rollbackTunnelStart(entryNode, nodes, plan.Chain.Name, createdRelays)
+		_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusError)
+		return err
+	}
 
-	// 保存入口节点配置
-	_ = entryClient.SaveConfig()
-
-	// 更新隧道状态和服务 ID
-	_ = s.tunnelRepo.UpdateServiceInfo(id, relayServiceName, chainName)
+	finalRelayName := plan.Relays[len(plan.Relays)-1].Service.Name
+	_ = s.tunnelRepo.UpdateServiceInfo(id, finalRelayName, plan.Chain.Name)
 	_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusRunning)
 
 	s.logService.Record(
@@ -342,33 +294,38 @@ func (s *TunnelService) Start(id uint, userID uint, username string, ip, userAge
 		ip,
 		userAgent)
 
-	logger.Infof("启动隧道成功: %s (Relay: %s -> Chain: %s)", tunnel.Name, relayServiceName, chainName)
+	logger.Infof("启动隧道成功: %s (Chain: %s)", tunnel.Name, plan.Chain.Name)
 	return nil
 }
 
-// Stop 停止隧道
-// 删除入口节点的 Chain 和出口节点的 Relay 服务
 func (s *TunnelService) Stop(id uint, userID uint, username string, ip, userAgent string) error {
 	tunnel, err := s.tunnelRepo.FindByID(id)
 	if err != nil {
 		return err
 	}
-
-	// 未运行则跳过
 	if tunnel.Status != model.TunnelStatusRunning {
 		return nil
 	}
 
-	// 获取入口和出口节点
 	entryNode, _ := s.nodeRepo.FindByID(tunnel.EntryNodeID)
-	exitNode, _ := s.nodeRepo.FindByID(tunnel.ExitNodeID)
+	hops := tunnel.EffectiveHops()
+	nodes := make(map[uint]*model.GostNode, len(hops))
+	for _, hop := range hops {
+		if node, err := s.nodeRepo.FindByID(hop.NodeID); err == nil {
+			nodes[hop.NodeID] = node
+		}
+	}
 
+	plan, _ := buildTunnelRuntimePlan(tunnel, nodes)
 	deleteSucceeded := true
 
-	// 步骤1：删除入口节点的 Chain
-	if entryNode != nil && entryNode.Status == model.NodeStatusOnline && tunnel.ChainID != "" {
+	chainName := tunnel.ChainID
+	if chainName == "" {
+		chainName = fmt.Sprintf("tunnel-%d-chain", tunnel.ID)
+	}
+	if entryNode != nil && entryNode.Status == model.NodeStatusOnline {
 		entryClient := utils.GetGostClient(entryNode)
-		if err = entryClient.DeleteChain(tunnel.ChainID); err != nil {
+		if err = entryClient.DeleteChain(chainName); err != nil {
 			deleteSucceeded = false
 			logger.Warnf("删除隧道 Chain 失败: %v", err)
 		}
@@ -378,24 +335,37 @@ func (s *TunnelService) Stop(id uint, userID uint, username string, ip, userAgen
 		}
 	}
 
-	// 步骤2：删除出口节点的 Relay 服务
-	if exitNode != nil && exitNode.Status == model.NodeStatusOnline && tunnel.ServiceID != "" {
-		exitClient := utils.GetGostClient(exitNode)
-		if err = exitClient.DeleteService(tunnel.ServiceID); err != nil {
-			deleteSucceeded = false
-			logger.Warnf("删除隧道 Relay 服务失败: %v", err)
+	if plan != nil {
+		for _, relay := range plan.Relays {
+			node := nodes[relay.NodeID]
+			if node == nil || node.Status != model.NodeStatusOnline {
+				continue
+			}
+			client := utils.GetGostClient(node)
+			if err = client.DeleteService(relay.Service.Name); err != nil {
+				deleteSucceeded = false
+				logger.Warnf("删除隧道 Relay 服务失败: %v", err)
+			}
+			if err = client.SaveConfig(); err != nil {
+				deleteSucceeded = false
+				logger.Warnf("保存 hop 节点 Gost 配置失败: %v", err)
+			}
 		}
-		if err = exitClient.SaveConfig(); err != nil {
-			deleteSucceeded = false
-			logger.Warnf("保存出口节点 Gost 配置失败: %v", err)
+	} else if tunnel.ServiceID != "" {
+		if node := nodes[tunnel.ExitNodeID]; node != nil && node.Status == model.NodeStatusOnline {
+			client := utils.GetGostClient(node)
+			if err = client.DeleteService(tunnel.ServiceID); err != nil {
+				deleteSucceeded = false
+			}
+			if err = client.SaveConfig(); err != nil {
+				deleteSucceeded = false
+			}
 		}
 	}
 
 	if deleteSucceeded {
 		_ = s.tunnelRepo.ResetStatsCheckpoint(id)
 	}
-
-	// 更新状态
 	_ = s.tunnelRepo.UpdateStatus(id, model.TunnelStatusStopped)
 
 	s.logService.Record(
@@ -412,7 +382,6 @@ func (s *TunnelService) Stop(id uint, userID uint, username string, ip, userAgen
 	return nil
 }
 
-// GetChainID 获取隧道的 Chain ID（供规则服务使用）
 func (s *TunnelService) GetChainID(tunnelID uint) (string, error) {
 	tunnel, err := s.tunnelRepo.FindByID(tunnelID)
 	if err != nil {
@@ -421,11 +390,41 @@ func (s *TunnelService) GetChainID(tunnelID uint) (string, error) {
 	return tunnel.ChainID, nil
 }
 
-// GetEntryNodeID 获取隧道的入口节点 ID（供规则服务使用）
 func (s *TunnelService) GetEntryNodeID(tunnelID uint) (uint, error) {
 	tunnel, err := s.tunnelRepo.FindByID(tunnelID)
 	if err != nil {
 		return 0, err
 	}
 	return tunnel.EntryNodeID, nil
+}
+
+func (s *TunnelService) configureTunnelRelayObserver(client *gost.Client, relaySvc *gost.ServiceConfig) {
+	observerName, err := EnsureGlobalObserver(client, s.sysRepo)
+	if err != nil || observerName == "" {
+		return
+	}
+	relaySvc.Observer = observerName
+	if relaySvc.Metadata == nil {
+		relaySvc.Metadata = make(map[string]any)
+	}
+	relaySvc.Metadata["enableStats"] = true
+	relaySvc.Metadata["observer.period"] = "5s"
+	relaySvc.Metadata["observer.resetTraffic"] = false
+}
+
+func (s *TunnelService) rollbackTunnelStart(entryNode *model.GostNode, nodes map[uint]*model.GostNode, chainName string, relays []tunnelRelayPlan) {
+	if entryNode != nil && entryNode.Status == model.NodeStatusOnline {
+		entryClient := utils.GetGostClient(entryNode)
+		_ = entryClient.DeleteChain(chainName)
+		_ = entryClient.SaveConfig()
+	}
+	for _, relay := range relays {
+		node := nodes[relay.NodeID]
+		if node == nil || node.Status != model.NodeStatusOnline {
+			continue
+		}
+		client := utils.GetGostClient(node)
+		_ = client.DeleteService(relay.Service.Name)
+		_ = client.SaveConfig()
+	}
 }

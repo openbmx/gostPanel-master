@@ -189,6 +189,13 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 			return nil, err
 		}
 	}
+	var backupTunnelIDs []uint
+	if rule.Type == model.RuleTypeTunnel {
+		backupTunnelIDs, err = s.normalizeBackupTunnelIDs(req.TunnelID, req.BackupTunnelIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	wasRunning := rule.Status == model.RuleStatusRunning
 	if wasRunning {
@@ -209,10 +216,6 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 	if rule.Type == model.RuleTypeTunnel {
 		rule.TunnelID = req.TunnelID
 		rule.PrimaryTunnelID = req.TunnelID // 用户主动修改 → 同步更新主链路记录
-		backupTunnelIDs, err := s.normalizeBackupTunnelIDs(req.TunnelID, req.BackupTunnelIDs)
-		if err != nil {
-			return nil, err
-		}
 		rule.BackupTunnelIDs = backupTunnelIDs
 	} else {
 		rule.TunnelID = nil
@@ -270,24 +273,9 @@ func (s *RuleService) validateTunnelSwitchTarget(tunnelID *uint) error {
 		return err
 	}
 
-	if tunnel.Status != model.TunnelStatusRunning {
-		return errors.ErrTunnelNotRunning
+	if !s.isTunnelUsable(tunnel) {
+		return errors.ErrTunnelFailoverUnavailable
 	}
-	if tunnel.ChainID == "" {
-		return errors.ErrTunnelChainNotFound
-	}
-
-	entryNode, err := s.nodeRepo.FindByID(tunnel.EntryNodeID)
-	if err != nil {
-		if stderrors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.ErrNodeNotFound
-		}
-		return err
-	}
-	if entryNode.Status == model.NodeStatusOffline {
-		return errors.ErrEntryNodeOffline
-	}
-
 	return nil
 }
 
@@ -346,15 +334,13 @@ func (s *RuleService) List(req *dto.RuleListReq) ([]model.GostRule, int64, error
 	req.SetDefaults()
 
 	opt := &repository.QueryOption{
-		Pagination: &repository.Pagination{
-			Page:     req.Page,
-			PageSize: req.PageSize,
-		},
 		Conditions: make(map[string]any),
 	}
-
-	if req.NodeID > 0 {
-		opt.Conditions["node_id = ?"] = req.NodeID
+	if req.NodeID == 0 {
+		opt.Pagination = &repository.Pagination{
+			Page:     req.Page,
+			PageSize: req.PageSize,
+		}
 	}
 	if req.TunnelID > 0 {
 		opt.Conditions["tunnel_id = ?"] = req.TunnelID
@@ -369,7 +355,27 @@ func (s *RuleService) List(req *dto.RuleListReq) ([]model.GostRule, int64, error
 		opt.Conditions["name LIKE ?"] = []interface{}{"%" + req.Keyword + "%"}
 	}
 
-	return s.ruleRepo.List(opt)
+	rules, total, err := s.ruleRepo.List(opt)
+	if err != nil || req.NodeID == 0 {
+		return rules, total, err
+	}
+
+	filtered := make([]model.GostRule, 0, len(rules))
+	for i := range rules {
+		if s.ruleUsesRuntimeNode(&rules[i], req.NodeID) {
+			filtered = append(filtered, rules[i])
+		}
+	}
+	total = int64(len(filtered))
+	start := (req.Page - 1) * req.PageSize
+	if start >= len(filtered) {
+		return []model.GostRule{}, total, nil
+	}
+	end := start + req.PageSize
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[start:end], total, nil
 }
 
 // Start starts a rule.
@@ -616,10 +622,36 @@ func (s *RuleService) getEntryNodeID(rule *model.GostRule) uint {
 	return 0
 }
 
+func (s *RuleService) ruleUsesRuntimeNode(rule *model.GostRule, nodeID uint) bool {
+	if rule == nil || nodeID == 0 {
+		return false
+	}
+	if rule.Type == model.RuleTypeTunnel {
+		if rule.Tunnel != nil && rule.Tunnel.EntryNodeID == nodeID {
+			return true
+		}
+		if rule.TunnelID != nil {
+			entryNodeID, err := s.tunnelService.GetEntryNodeID(*rule.TunnelID)
+			return err == nil && entryNodeID == nodeID
+		}
+		return false
+	}
+	return rule.NodeID != nil && *rule.NodeID == nodeID
+}
+
 func (s *RuleService) normalizeBackupTunnelIDs(primaryID *uint, backupIDs []uint) ([]uint, error) {
 	seen := make(map[uint]struct{})
+	var primaryEntryNodeID uint
 	if primaryID != nil && *primaryID > 0 {
 		seen[*primaryID] = struct{}{}
+		primaryTunnel, err := s.tunnelRepo.FindByID(*primaryID)
+		if err != nil {
+			if stderrors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errors.ErrTunnelNotFound
+			}
+			return nil, err
+		}
+		primaryEntryNodeID = primaryTunnel.EntryNodeID
 	}
 
 	result := make([]uint, 0, len(backupIDs))
@@ -630,11 +662,15 @@ func (s *RuleService) normalizeBackupTunnelIDs(primaryID *uint, backupIDs []uint
 		if _, ok := seen[backupID]; ok {
 			continue
 		}
-		if _, err := s.tunnelRepo.FindByID(backupID); err != nil {
+		backupTunnel, err := s.tunnelRepo.FindByID(backupID)
+		if err != nil {
 			if stderrors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, errors.ErrTunnelNotFound
 			}
 			return nil, err
+		}
+		if primaryEntryNodeID > 0 && backupTunnel.EntryNodeID != primaryEntryNodeID {
+			return nil, errors.ErrTunnelEntryMismatch
 		}
 		seen[backupID] = struct{}{}
 		result = append(result, backupID)
@@ -648,10 +684,19 @@ func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTu
 	// 这样当主链路恢复时，下次巡检会自动切回主链路。
 	seen := make(map[uint]bool)
 
+	var expectedEntryNodeID uint
 	var candidates []*uint
 	if rule.PrimaryTunnelID != nil {
 		candidates = append(candidates, rule.PrimaryTunnelID)
 		seen[*rule.PrimaryTunnelID] = true
+		if primary, err := s.tunnelRepo.FindByID(*rule.PrimaryTunnelID); err == nil {
+			expectedEntryNodeID = primary.EntryNodeID
+		}
+	}
+	if expectedEntryNodeID == 0 && rule.TunnelID != nil {
+		if current, err := s.tunnelRepo.FindByID(*rule.TunnelID); err == nil {
+			expectedEntryNodeID = current.EntryNodeID
+		}
 	}
 	if rule.TunnelID != nil && !seen[*rule.TunnelID] {
 		candidates = append(candidates, rule.TunnelID)
@@ -670,6 +715,9 @@ func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTu
 		if err != nil {
 			continue
 		}
+		if expectedEntryNodeID > 0 && tunnel.EntryNodeID != expectedEntryNodeID {
+			continue
+		}
 		if s.isTunnelUsable(tunnel) {
 			return tunnel, nil
 		}
@@ -686,7 +734,17 @@ func (s *RuleService) isTunnelUsable(tunnel *model.GostTunnel) bool {
 	if err != nil {
 		return false
 	}
-	return entryNode.Status != model.NodeStatusOffline
+	if entryNode.Status == model.NodeStatusOffline {
+		return false
+	}
+
+	for _, hop := range tunnel.EffectiveHops() {
+		node, err := s.nodeRepo.FindByID(hop.NodeID)
+		if err != nil || node.Status == model.NodeStatusOffline {
+			return false
+		}
+	}
+	return true
 }
 
 // setupRuleObserver configures the rule observer.

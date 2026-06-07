@@ -66,6 +66,8 @@ var (
 	ErrTunnelChainNotFound = New(10109, "隧道未启动或链路不存在", http.StatusBadRequest)
 	// ErrTunnelFailoverUnavailable 隧道及备选隧道均不可用
 	ErrTunnelFailoverUnavailable = New(10110, "当前隧道及备选隧道均不可用", http.StatusBadRequest)
+	// ErrTunnelEntryMismatch 备选隧道入口节点与主隧道不一致
+	ErrTunnelEntryMismatch = New(10111, "备选隧道必须与主隧道使用相同入口节点", http.StatusBadRequest)
 )
 
 // ==================== 隧道相关错误 (102xx) ====================

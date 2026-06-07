@@ -20,6 +20,7 @@ import (
 // 负责节点的 CRUD 操作和业务逻辑处理
 type NodeService struct {
 	nodeRepo   *repository.NodeRepository
+	tunnelRepo *repository.TunnelRepository
 	logService *LogService
 }
 
@@ -27,6 +28,7 @@ type NodeService struct {
 func NewNodeService(db *gorm.DB) *NodeService {
 	return &NodeService{
 		nodeRepo:   repository.NewNodeRepository(db),
+		tunnelRepo: repository.NewTunnelRepository(db),
 		logService: NewLogService(db),
 	}
 }
@@ -138,7 +140,11 @@ func (s *NodeService) Delete(id uint, userID uint, username string, ip, userAgen
 	}
 
 	// 删除节点前，用户需要手动删除相关隧道
-	if len(node.EntryTunnels) > 0 || len(node.ExitTunnels) > 0 {
+	tunnels, err := s.tunnelRepo.FindByNodeID(id)
+	if err != nil {
+		return err
+	}
+	if len(node.EntryTunnels) > 0 || len(node.ExitTunnels) > 0 || len(tunnels) > 0 {
 		return errors.ErrNodeHasTunnels
 	}
 

@@ -218,3 +218,128 @@ func TestRuleRepositoryRuntimeNodeQueriesIncludeTunnelRules(t *testing.T) {
 		t.Fatalf("port conflict check should include tunnel entry rule")
 	}
 }
+
+func TestTunnelRepositoryFindByNodeIDIncludesExplicitHopNodes(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewTunnelRepository(db)
+	entryNode := createRepositoryTestNode(t, db, "entry-node")
+	middleNode := createRepositoryTestNode(t, db, "middle-node")
+	exitNode := createRepositoryTestNode(t, db, "exit-node")
+	tunnel := &model.GostTunnel{
+		Name:        "chain-tunnel",
+		EntryNodeID: entryNode.ID,
+		ExitNodeID:  exitNode.ID,
+		Protocol:    "ws",
+		RelayPort:   8443,
+		Hops: []model.TunnelHop{
+			{NodeID: middleNode.ID, Protocol: "ws", RelayPort: 9001},
+			{NodeID: exitNode.ID, Protocol: "ws", RelayPort: 9002},
+		},
+	}
+	if err := db.Create(tunnel).Error; err != nil {
+		t.Fatalf("create tunnel failed: %v", err)
+	}
+
+	tunnels, err := repo.FindByNodeID(middleNode.ID)
+	if err != nil {
+		t.Fatalf("find by hop node id failed: %v", err)
+	}
+	if len(tunnels) != 1 || tunnels[0].ID != tunnel.ID {
+		t.Fatalf("expected hop node lookup to include tunnel, got %+v", tunnels)
+	}
+}
+
+func TestTunnelRepositoryStopByNodeIDIncludesExplicitHopNodes(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewTunnelRepository(db)
+	entryNode := createRepositoryTestNode(t, db, "entry-node")
+	middleNode := createRepositoryTestNode(t, db, "middle-node")
+	exitNode := createRepositoryTestNode(t, db, "exit-node")
+	tunnel := &model.GostTunnel{
+		Name:        "chain-tunnel",
+		EntryNodeID: entryNode.ID,
+		ExitNodeID:  exitNode.ID,
+		Protocol:    "ws",
+		RelayPort:   8443,
+		Status:      model.TunnelStatusRunning,
+		Hops: []model.TunnelHop{
+			{NodeID: middleNode.ID, Protocol: "ws", RelayPort: 9001},
+			{NodeID: exitNode.ID, Protocol: "ws", RelayPort: 9002},
+		},
+	}
+	if err := db.Create(tunnel).Error; err != nil {
+		t.Fatalf("create tunnel failed: %v", err)
+	}
+
+	if err := repo.StopByNodeID(middleNode.ID); err != nil {
+		t.Fatalf("stop by hop node id failed: %v", err)
+	}
+
+	var updated model.GostTunnel
+	if err := db.First(&updated, tunnel.ID).Error; err != nil {
+		t.Fatalf("load updated tunnel failed: %v", err)
+	}
+	if updated.Status != model.TunnelStatusStopped {
+		t.Fatalf("expected tunnel using hop node to be stopped, got %s", updated.Status)
+	}
+}
+
+func TestTunnelRepositoryHasRulesIncludesPrimaryAndBackupTunnelReferences(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewTunnelRepository(db)
+	entryNode := createRepositoryTestNode(t, db, "entry-node")
+	exitNode := createRepositoryTestNode(t, db, "exit-node")
+	primary := &model.GostTunnel{
+		Name:        "primary",
+		EntryNodeID: entryNode.ID,
+		ExitNodeID:  exitNode.ID,
+		Protocol:    "ws",
+		RelayPort:   8443,
+	}
+	backup := &model.GostTunnel{
+		Name:        "backup",
+		EntryNodeID: entryNode.ID,
+		ExitNodeID:  exitNode.ID,
+		Protocol:    "ws",
+		RelayPort:   8444,
+	}
+	active := &model.GostTunnel{
+		Name:        "active",
+		EntryNodeID: entryNode.ID,
+		ExitNodeID:  exitNode.ID,
+		Protocol:    "ws",
+		RelayPort:   8445,
+	}
+	if err := db.Create(primary).Error; err != nil {
+		t.Fatalf("create primary tunnel failed: %v", err)
+	}
+	if err := db.Create(backup).Error; err != nil {
+		t.Fatalf("create backup tunnel failed: %v", err)
+	}
+	if err := db.Create(active).Error; err != nil {
+		t.Fatalf("create active tunnel failed: %v", err)
+	}
+
+	rule := &model.GostRule{
+		Name:            "rule",
+		Type:            model.RuleTypeTunnel,
+		TunnelID:        &active.ID,
+		PrimaryTunnelID: &primary.ID,
+		BackupTunnelIDs: []uint{backup.ID},
+		ListenPort:      9000,
+		Status:          model.RuleStatusStopped,
+	}
+	if err := db.Create(rule).Error; err != nil {
+		t.Fatalf("create rule failed: %v", err)
+	}
+
+	for _, tunnelID := range []uint{primary.ID, backup.ID, active.ID} {
+		hasRules, err := repo.HasRules(tunnelID)
+		if err != nil {
+			t.Fatalf("has rules failed for tunnel %d: %v", tunnelID, err)
+		}
+		if !hasRules {
+			t.Fatalf("expected tunnel %d to be treated as referenced", tunnelID)
+		}
+	}
+}

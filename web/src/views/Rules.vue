@@ -55,9 +55,9 @@
             </template>
           </template>
         </el-table-column>
-        <el-table-column label="隧道" width="120" align="center">
+        <el-table-column label="隧道" min-width="220" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.tunnel" size="small" type="warning">{{ row.tunnel?.name || '-' }}</el-tag>
+            <el-tag v-if="row.tunnel" size="small" type="warning" class="tunnel-tag">{{ getTunnelLabel(row.tunnel) }}</el-tag>
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
@@ -149,11 +149,11 @@
         </el-form-item>
         <!-- 隧道转发：选择隧道 -->
         <el-form-item v-if="form.type === 'tunnel'" label="选择隧道" prop="tunnel_id">
-          <el-select v-model="form.tunnel_id" placeholder="请选择隧道" style="width: 100%">
+          <el-select v-model="form.tunnel_id" placeholder="请选择隧道" style="width: 100%" @change="normalizeBackupSelection">
             <el-option 
               v-for="tunnel in tunnelList" 
               :key="tunnel.id" 
-              :label="`${tunnel.name} (${tunnel.entry_node?.name || '-'} → ${tunnel.exit_node?.name || '-'})`" 
+              :label="getTunnelLabel(tunnel)"
               :value="tunnel.id" 
             />
           </el-select>
@@ -162,9 +162,9 @@
         <el-form-item v-if="form.type === 'tunnel'" label="备选隧道" prop="backup_tunnel_ids">
           <el-select v-model="form.backup_tunnel_ids" multiple clearable placeholder="可选，选择可自动切换的备选隧道" style="width: 100%">
             <el-option 
-              v-for="tunnel in tunnelList" 
+              v-for="tunnel in availableBackupTunnels"
               :key="tunnel.id" 
-              :label="`${tunnel.name} (${tunnel.entry_node?.name || '-'} → ${tunnel.exit_node?.name || '-'})`" 
+              :label="getTunnelLabel(tunnel)"
               :value="tunnel.id" 
             />
           </el-select>
@@ -218,7 +218,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search, EditPen, Remove as UseRemove } from '@element-plus/icons-vue'
 import { getRuleList, createRule, updateRule, deleteRule, startRule, stopRule } from '@/api/rule'
@@ -294,6 +294,51 @@ const getStatusText = (status) => {
 }
 
 // 格式化字节数
+const getNodeName = (id) => {
+  return nodeList.value.find(node => node.id === id)?.name || '-'
+}
+
+const getTunnelHops = (tunnel) => {
+  if (tunnel?.hops && tunnel.hops.length) return tunnel.hops
+  if (tunnel?.exit_node_id) {
+    return [{ node_id: tunnel.exit_node_id, protocol: tunnel.protocol || 'ws', relay_port: tunnel.relay_port || 8443 }]
+  }
+  return []
+}
+
+const getTunnelLabel = (tunnel) => {
+  if (!tunnel) return '-'
+  const names = [tunnel.entry_node?.name || getNodeName(tunnel.entry_node_id)]
+  for (const hop of getTunnelHops(tunnel)) {
+    names.push(getNodeName(hop.node_id))
+  }
+  return `${tunnel.name} (${names.join(' -> ')})`
+}
+
+const getTunnelById = (id) => {
+  return tunnelList.value.find(tunnel => tunnel.id === id)
+}
+
+const getSameEntryBackupTunnels = (primaryTunnelId) => {
+  const primary = getTunnelById(primaryTunnelId)
+  if (!primary) return []
+  return tunnelList.value.filter(tunnel => tunnel.id !== primary.id && tunnel.entry_node_id === primary.entry_node_id)
+}
+
+const availableBackupTunnels = computed(() => {
+  if (form.type !== 'tunnel' || !form.tunnel_id) return []
+  return getSameEntryBackupTunnels(form.tunnel_id)
+})
+
+const normalizeBackupSelection = () => {
+  if (form.type !== 'tunnel' || !form.tunnel_id) {
+    form.backup_tunnel_ids = []
+    return
+  }
+  const allowed = new Set(getSameEntryBackupTunnels(form.tunnel_id).map(tunnel => tunnel.id))
+  form.backup_tunnel_ids = form.backup_tunnel_ids.filter(id => allowed.has(id))
+}
+
 const formatBytes = (bytes) => {
   if (!bytes || bytes === 0) return '0 B'
   const k = 1024
@@ -385,6 +430,8 @@ const openDialog = (row = null) => {
       remark: ''
     })
   }
+
+  normalizeBackupSelection()
   
   dialogVisible.value = true
 }
@@ -546,6 +593,13 @@ const handleTypeChange = (val) => {
 .text-muted {
   color: #909399;
   font-size: 12px;
+}
+
+.tunnel-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 .form-hint {

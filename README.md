@@ -49,7 +49,11 @@
 > 若遗忘密码，把 `admin.force_reset` 临时设为 `true` 启动一次即可重置（重置后会吊销所有已签发的 Token，记得改回 `false`）。
 
 > ⚠️ **公网部署前请启用 HTTPS**（配置 `server.tls` 或前置反向代理）。面板以明文 HTTP 运行时，登录口令与 Token 均可被链路上的任何人读取。
-> 若使用反向代理，务必同时配置 `server.trusted_proxies`，否则限流与审计日志中的来源 IP 会全部变成代理地址。
+>
+> 使用反向代理时，请先读 **[反向代理与边缘安全](./docs/EDGE_SECURITY.md)**。
+> 其中最关键的一条：代理必须用 `$remote_addr` **覆写** `X-Forwarded-For`，
+> 而不是用流传最广的 `$proxy_add_x_forwarded_for` 追加 —— 后者会让面板的
+> 登录限流与审计日志被攻击者随意伪造。该文档附有 Nginx / Caddy 基线配置与自查清单。
 
 ### ⭐ 方式 0：一键管理脚本（最简单，推荐新手）
 
@@ -194,6 +198,11 @@ GOST_VERSION=3.2.6 \
 - **流量上报**：`/api/v1/observer/report` 使用面板自动生成的独立令牌鉴权，令牌会随观察器配置下发到各节点。从旧版本升级时，节点上的观察器会在下次启动规则/隧道时自动更新为带令牌的地址。
 - **改密即登出**：修改密码会立即使此前签发的所有 Token 失效。
 - **审计**：登录失败、节点凭据查看等敏感操作均记入操作日志，可在「操作日志」页查询。
+- **运行权限**：Docker 镜像与一键脚本均以非 root 的专用账号运行面板；systemd 单元附带 `ProtectSystem=strict`、`NoNewPrivileges` 等沙箱限制。
+- **文件权限**：备份文件（含全部节点明文凭据）为 `0600`、备份目录 `0700`、日志文件 `0600`。
+- **依赖扫描**：CI 每次提交与每周定时执行 `govulncheck` 与 `npm audit`，高危漏洞必须升级或在 [.github/audit-exceptions.yml](.github/audit-exceptions.yml) 中登记带到期日的例外。
+
+更完整的部署加固说明见 [docs/EDGE_SECURITY.md](./docs/EDGE_SECURITY.md)。
 
 ## 🕹️ 使用指南
 

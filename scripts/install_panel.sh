@@ -196,7 +196,30 @@ EOF
 # 创建 systemd 服务
 create_service() {
     echo -e "${BLUE}[5/6] 创建系统服务...${PLAIN}"
-    
+
+    # 安全：面板不需要 root 权限运行。
+    # 它被攻破等同于拿到所有受管节点的转发控制权；若再叠加 root，
+    # 攻击者还会直接获得面板主机本身。这里创建一个无登录 shell 的系统账号。
+    SERVICE_USER="gost-panel"
+    if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        useradd --system --no-create-home --shell /usr/sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+            || adduser --system --no-create-home --shell /sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+            || adduser -S -H -s /sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+            || true
+    fi
+
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        # 数据与日志目录归服务账号；配置文件保持 root 所有、服务账号只读
+        chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_PATH}" "${LOG_PATH}" 2>/dev/null || true
+        chmod 700 "${DATA_PATH}" 2>/dev/null || true
+        chmod 750 "${LOG_PATH}" 2>/dev/null || true
+        chgrp "${SERVICE_USER}" "${CONFIG_PATH}/config.yaml" 2>/dev/null || true
+        chmod 640 "${CONFIG_PATH}/config.yaml" 2>/dev/null || true
+    else
+        echo -e "${YELLOW}⚠️  未能创建 ${SERVICE_USER} 账号，服务将以 root 运行（安全性较低）${PLAIN}"
+        SERVICE_USER="root"
+    fi
+
     cat > /etc/systemd/system/gost-panel.service <<EOF
 [Unit]
 Description=Gost Panel Service
@@ -206,21 +229,43 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 WorkingDirectory=${DATA_PATH}
 ExecStart=${INSTALL_PATH}/gost-panel -c ${CONFIG_PATH}/config.yaml
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
 
+# ---- 安全加固 ----
+# 禁止通过 setuid 等方式提权
+NoNewPrivileges=true
+# 整个文件系统只读，仅显式放行下面的路径
+ProtectSystem=strict
+ReadWritePaths=${DATA_PATH} ${LOG_PATH}
+# 隔离用户家目录、/tmp、内核与控制组接口
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# 仅允许常规网络协议族
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# 若把监听端口改到 1024 以下，需要这条能力才能绑定
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload
     systemctl enable gost-panel
-    
-    echo -e "${GREEN}✅ 服务创建完成${PLAIN}"
+
+    echo -e "${GREEN}✅ 服务创建完成（运行账号: ${SERVICE_USER}）${PLAIN}"
 }
 
 # 启动服务

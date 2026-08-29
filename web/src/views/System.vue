@@ -40,7 +40,13 @@
               <el-input v-model="loginForm.turnstileSiteKey" placeholder="请输入 Cloudflare Turnstile Site Key" />
             </el-form-item>
             <el-form-item label="Secret Key" prop="turnstileSecretKey">
-              <el-input v-model="loginForm.turnstileSecretKey" type="password" show-password placeholder="请输入 Cloudflare Turnstile Secret Key" />
+              <!-- 服务端只回传占位符表示"已设置"，原样提交即保持不变；填新值才会覆盖 -->
+              <el-input
+                v-model="loginForm.turnstileSecretKey"
+                type="password"
+                show-password
+                :placeholder="secretIsSet('turnstileSecretKey') ? '已设置，留空表示不修改' : '请输入 Cloudflare Turnstile Secret Key'"
+              />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="loading" @click="handleSave('login')">保存设置</el-button>
@@ -61,7 +67,12 @@
               <el-input v-model="emailForm.username" placeholder="请输入SMTP用户名" />
             </el-form-item>
             <el-form-item label="密码" prop="password">
-              <el-input v-model="emailForm.password" type="password" show-password placeholder="请输入SMTP密码" />
+              <el-input
+                v-model="emailForm.password"
+                type="password"
+                show-password
+                :placeholder="secretIsSet('smtpPassword') ? '已设置，留空表示不修改' : '请输入SMTP密码'"
+              />
             </el-form-item>
             <el-form-item label="发件人邮箱" prop="fromEmail">
               <el-input v-model="emailForm.fromEmail" placeholder="例如: noreply@example.com" />
@@ -118,6 +129,26 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getSystemConfig, updateSystemConfig, sendTestEmail, backupSystem } from '@/api/system'
 
+// 服务端用该占位符表示"此密钥已设置但不回显真实值"。
+// 前端在载入时把它从表单值里剥离（否则用户点"显示密码"会看到这串内部标记），
+// 只保留一个"是否已设置"的标志用于提示文案。
+// 提交时留空 = 保持不变，填入新值才会覆盖 —— 这既避免把 SMTP 密码 /
+// Turnstile Secret 明文下发到浏览器，也修掉了"保存任意设置就清空 Secret"的问题。
+const SECRET_PLACEHOLDER = '__GOSTPANEL_UNCHANGED__'
+
+const secretsSet = reactive({ smtpPassword: false, turnstileSecretKey: false })
+const secretIsSet = (key) => secretsSet[key]
+
+// 把响应中的占位符转换为「空值 + 已设置标志」
+const stripSecretPlaceholder = (form, field, flagKey) => {
+    if (form[field] === SECRET_PLACEHOLDER) {
+        secretsSet[flagKey] = true
+        form[field] = ''
+    } else {
+        secretsSet[flagKey] = false
+    }
+}
+
 const activeTab = ref('config')
 const loading = ref(false)
 const testEmailVisible = ref(false)
@@ -168,8 +199,12 @@ const fetchConfig = async () => {
             }
             if (email) Object.assign(emailForm, email)
             if (config) Object.assign(configForm, config)
-          if (login) Object.assign(loginForm, login)
+            if (login) Object.assign(loginForm, login)
             if (backup) Object.assign(backupForm, backup)
+
+            // 密钥字段只保留"已设置"标志，不把占位符留在输入框里
+            stripSecretPlaceholder(emailForm, 'password', 'smtpPassword')
+            stripSecretPlaceholder(loginForm, 'turnstileSecretKey', 'turnstileSecretKey')
         }
     } catch (error) {
         console.error('获取系统配置失败:', error)

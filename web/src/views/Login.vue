@@ -73,14 +73,15 @@ const loginForm = reactive({
   turnstile_token: ''
 })
 
+// 登录表单只做"非空"校验。
+// 在登录处校验密码格式没有安全收益，反而会把密码不符合当前策略的存量用户
+// 直接挡在门外（他们本该能登录进来再改密）。强度策略只在设置密码时执行。
 const loginRules = {
   username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '用户名长度为 3-50 个字符', trigger: 'blur' }
+    { required: true, message: '请输入用户名', trigger: 'blur' }
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 50, message: '密码长度为 6-50 个字符', trigger: 'blur' }
+    { required: true, message: '请输入密码', trigger: 'blur' }
   ]
 }
 

@@ -119,10 +119,27 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="认证密码" prop="password">
-              <el-input v-model="form.password" placeholder="密码" :prefix-icon="Lock" />
+              <!-- 安全：密码不再随节点数据下发，编辑时无法回填。留空即表示不修改。 -->
+              <el-input
+                v-model="form.password"
+                type="password"
+                show-password
+                :placeholder="isEdit ? '留空表示不修改' : '密码'"
+                :prefix-icon="Lock"
+              />
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item label="API 协议" prop="scheme">
+          <el-radio-group v-model="form.scheme">
+            <el-radio value="http">HTTP</el-radio>
+            <el-radio value="https">HTTPS</el-radio>
+          </el-radio-group>
+          <div class="form-tip">
+            使用 HTTP 时，节点认证密码会以明文跨网络传输。若节点已配置 TLS，请选择 HTTPS。
+          </div>
+        </el-form-item>
 
         <el-form-item label="备注说明" prop="remark">
           <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="备注信息" />
@@ -195,29 +212,48 @@
     </el-dialog>
 
     <!-- 安装脚本对话框 -->
-    <el-dialog v-model="installDialogVisible" :title="'安装节点: ' + currentInstallNode?.name" width="650px" :close-on-click-modal="false">
+    <el-dialog
+      v-model="installDialogVisible"
+      :title="'安装节点: ' + currentInstallNode?.name"
+      width="650px"
+      :close-on-click-modal="false"
+      @closed="handleInstallDialogClosed"
+    >
       <el-alert type="info" :closable="false" style="margin-bottom: 20px;">
         <template #title>
           在目标服务器上执行以下命令，将自动安装 Gost 并配置为当前节点设置的参数。
         </template>
       </el-alert>
 
+      <el-alert type="warning" :closable="false" style="margin-bottom: 20px;">
+        <template #title>
+          命令中包含该节点的 API 密码，等同于目标主机的转发控制权。请勿在公开渠道分享，
+          本次查看已记录到操作日志。
+        </template>
+      </el-alert>
+
       <!-- 节点配置信息 -->
-      <div class="node-info-section" v-if="currentInstallNode">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="API 端口">{{ extractPort(currentInstallNode.api_url) }}</el-descriptions-item>
-          <el-descriptions-item label="用户名">{{ currentInstallNode.username || 'admin' }}</el-descriptions-item>
-          <el-descriptions-item label="密码">{{ currentInstallNode.password || '(自动生成)' }}</el-descriptions-item>
+      <div class="node-info-section" v-loading="credentialsLoading">
+        <el-descriptions v-if="installCredentials" :column="2" border size="small">
+          <el-descriptions-item label="API 端口">{{ installCredentials.port }}</el-descriptions-item>
+          <el-descriptions-item label="用户名">{{ installCredentials.username || 'admin' }}</el-descriptions-item>
+          <el-descriptions-item label="密码">{{ installCredentials.password || '(未设置)' }}</el-descriptions-item>
         </el-descriptions>
       </div>
 
       <div class="install-command-section">
         <div class="command-header">
           <span class="command-title">一键安装命令</span>
-          <el-button type="primary" size="small" :icon="CopyDocument" @click="copyInstallCommand">复制命令</el-button>
+          <el-button
+            type="primary"
+            size="small"
+            :icon="CopyDocument"
+            :disabled="!installCommand"
+            @click="copyInstallCommand"
+          >复制命令</el-button>
         </div>
         <div class="command-box">
-          <code>{{ installCommand }}</code>
+          <code>{{ installCommand || '正在获取节点凭据…' }}</code>
         </div>
       </div>
 
@@ -275,7 +311,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, CopyDocument, Management, Link, User, Lock } from '@element-plus/icons-vue'
-import { getNodeList, createNode, updateNode, deleteNode, getNodeConfig } from '@/api/node'
+import { getNodeList, createNode, updateNode, deleteNode, getNodeConfig, getNodeCredentials } from '@/api/node'
 
 // 节点脚本 URL（GitHub 自托管）
 const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/install_node.sh'
@@ -318,32 +354,19 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
-// 从 API URL 中提取端口号
-const extractPort = (apiUrl) => {
-  if (!apiUrl) return '39000'
-  try {
-    const url = new URL(apiUrl)
-    return url.port || '39000'
-  } catch {
-    // 尝试用正则匹配端口
-    const match = apiUrl.match(/:(\d+)/)
-    return match ? match[1] : '39000'
-  }
-}
+// 节点凭据：仅在用户点击"安装命令"时按需拉取。
+// 安全：密码不再随节点列表下发，这里通过独立接口获取，服务端会记录一条审计日志。
+const installCredentials = ref(null)
+const credentialsLoading = ref(false)
 
 // 生成安装命令（根据当前节点配置）
 const installCommand = computed(() => {
-  if (!currentInstallNode.value) return ''
-  
-  const node = currentInstallNode.value
-  const port = node.port
-  const username = node.username
-  const password = node.password
-  
+  const creds = installCredentials.value
+  if (!creds) return ''
+
   // 构建带参数的安装命令
   // 参数顺序: 端口 用户名 密码
-  let cmd = `bash <(curl -sL ${INSTALL_SCRIPT_URL}) ${port} ${username} ${password}`
-  return cmd
+  return `bash <(curl -sL ${INSTALL_SCRIPT_URL}) ${creds.port} ${creds.username} ${creds.password}`
 })
 
 // 生成升级命令（保留配置与账号，自动回滚）
@@ -357,13 +380,33 @@ const manageCommand = computed(() => {
 })
 
 // 显示安装命令对话框
-const showInstallCommand = (row) => {
+const showInstallCommand = async (row) => {
   currentInstallNode.value = row
+  installCredentials.value = null
   installDialogVisible.value = true
+
+  credentialsLoading.value = true
+  try {
+    const res = await getNodeCredentials(row.id)
+    installCredentials.value = res.data
+  } catch (error) {
+    console.error('获取节点凭据失败:', error)
+  } finally {
+    credentialsLoading.value = false
+  }
+}
+
+// 关闭安装对话框时清掉内存中的凭据，避免长期驻留
+const handleInstallDialogClosed = () => {
+  installCredentials.value = null
 }
 
 // 复制安装命令
 const copyInstallCommand = async () => {
+  if (!installCommand.value) {
+    ElMessage.warning('凭据尚未加载完成')
+    return
+  }
   try {
     await navigator.clipboard.writeText(installCommand.value)
     ElMessage.success('安装命令已复制到剪贴板')
@@ -396,6 +439,7 @@ const form = reactive({
   name: '',
   address: '',
   port: 39000,
+  scheme: 'http',
   username: '',
   password: '',
   remark: ''
@@ -406,7 +450,19 @@ const rules = {
   address: [{ required: true, message: '请输入 IP 或域名', trigger: 'blur' }],
   port: [{ required: true, message: '请输入端口', trigger: 'blur' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  password: [
+    {
+      // 新建时必填；编辑时留空表示沿用原密码（密码不会下发到前端，无法回填）
+      validator: (rule, value, callback) => {
+        if (!isEdit.value && !value) {
+          callback(new Error('请输入密码'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }
+  ]
 }
 
 // 获取数据
@@ -444,8 +500,10 @@ const openDialog = (row = null) => {
       name: row.name,
       address: row.address,
       port: row.port,
+      scheme: row.scheme || 'http',
       username: row.username,
-      password: row.password,
+      // 安全：密码不随节点数据下发，无法回填。留空提交即表示沿用原密码。
+      password: '',
       remark: row.remark
     })
   } else {
@@ -453,12 +511,14 @@ const openDialog = (row = null) => {
       name: '',
       address: '127.0.0.1',
       port: 39000,
+      scheme: 'http',
       username: 'admin',
-      password: '123456',
+      // 不再预填弱口令 123456，强制使用者显式设置
+      password: '',
       remark: ''
     })
   }
-  
+
   dialogVisible.value = true
 }
 
@@ -472,7 +532,10 @@ const handleSubmit = async () => {
     submitLoading.value = true
     try {
       if (isEdit.value) {
-        await updateNode(editId.value, form)
+        // 密码留空时不提交该字段，由后端沿用原密码
+        const payload = { ...form }
+        if (!payload.password) delete payload.password
+        await updateNode(editId.value, payload)
         ElMessage.success('更新成功')
       } else {
         await createNode(form)
@@ -511,16 +574,18 @@ const handleDelete = async (row) => {
 const handleCopy = (row) => {
   isEdit.value = false
   editId.value = null
-  
+
   Object.assign(form, {
     name: row.name,
     address: row.address || '',
     port: row.port || 39000,
+    scheme: row.scheme || 'http',
     username: row.username || '',
-    password: row.password || '',
+    // 密码不下发，复制节点时需要重新输入
+    password: '',
     remark: row.remark || ''
   })
-  
+
   dialogVisible.value = true
 }
 

@@ -62,3 +62,17 @@ export function getNodeConfig(id) {
         method: 'get'
     })
 }
+
+/**
+ * 获取节点 API 凭据（仅用于生成安装命令）
+ *
+ * 安全：节点密码不再随列表/详情下发 —— 它等同于目标主机 GOST 守护进程的完全控制权。
+ * 该接口是唯一会返回密码的入口，服务端每次调用都会写入操作日志。
+ * 请仅在用户明确点击"安装命令"时调用，不要预取。
+ */
+export function getNodeCredentials(id) {
+    return request({
+        url: `/nodes/${id}/credentials`,
+        method: 'get'
+    })
+}

@@ -1,19 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" href="/favicon.ico" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script>
-    (function () {
-      var savedTitle = localStorage.getItem('siteTitle');
-      if (savedTitle) {
-        document.title = savedTitle;
-      }
-    })();
-  </script>
-  <title>GostPanel</title>
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <!--
+    注意：这里刻意不放任何内联 <script>。
+    后端下发的 CSP 中 script-src 不含 'unsafe-inline'，内联脚本会被浏览器拒绝执行。
+    站点标题的恢复逻辑已移至 src/store/system.js，在应用启动时执行。
+  -->
+  <title>Gost Panel</title>
 </head>
 
 <body>

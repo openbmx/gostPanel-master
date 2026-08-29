@@ -107,22 +107,30 @@ const searchResourceType = ref('')
 
 // 操作类型
 const getActionType = (action) => {
-  const map = { login: 'warning', create: 'primary', update: 'warning', delete: 'danger', start: 'success', stop: 'info' }
+  const map = {
+    login: 'warning', login_failed: 'danger', logout: 'info',
+    change_password: 'warning', view_secret: 'danger',
+    create: 'primary', update: 'warning', delete: 'danger', start: 'success', stop: 'info'
+  }
   return map[action] || ''
 }
 
 const getActionText = (action) => {
-  const map = { login: '登录', logout: '登出', create: '创建', update: '更新', delete: '删除', start: '启动', stop: '停止', change_password: '改密' }
+  const map = {
+    login: '登录', login_failed: '登录失败', logout: '登出',
+    change_password: '改密', view_secret: '查看凭据',
+    create: '创建', update: '更新', delete: '删除', start: '启动', stop: '停止'
+  }
   return map[action] || action
 }
 
 const getResourceText = (type) => {
-  const map = { node: '节点', forward: '转发', tunnel: '隧道' }
+  const map = { node: '节点', rule: '规则', forward: '转发', tunnel: '隧道', auth: '认证' }
   return map[type] || type || '-'
 }
 
 const getResourceTagType = (type) => {
-  const map = { node: '', forward: 'success', tunnel: 'warning' }
+  const map = { node: '', rule: 'success', forward: 'success', tunnel: 'warning', auth: 'danger' }
   return map[type] || 'info'
 }
 

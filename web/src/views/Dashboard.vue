@@ -164,12 +164,20 @@ let timer = null
 
 // 操作类型
 const getActionType = (action) => {
-  const map = { login: 'success', create: 'primary', update: 'warning', delete: 'danger', start: 'success', stop: 'info' }
+  const map = {
+    login: 'success', login_failed: 'danger', logout: 'info',
+    change_password: 'warning', view_secret: 'danger',
+    create: 'primary', update: 'warning', delete: 'danger', start: 'success', stop: 'info'
+  }
   return map[action] || ''
 }
 
 const getActionText = (action) => {
-  const map = { login: '登录', logout: '登出', create: '创建', update: '更新', delete: '删除', start: '启动', stop: '停止', change_password: '改密' }
+  const map = {
+    login: '登录', login_failed: '登录失败', logout: '登出',
+    change_password: '改密', view_secret: '查看凭据',
+    create: '创建', update: '更新', delete: '删除', start: '启动', stop: '停止'
+  }
   return map[action] || action
 }
 

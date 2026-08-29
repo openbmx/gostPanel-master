@@ -116,7 +116,7 @@
           <el-input
             v-model="passwordForm.new_password"
             type="password"
-            placeholder="请输入新密码"
+            placeholder="至少 10 位，含大小写/数字/符号任意三类"
             show-password
           />
         </el-form-item>
@@ -204,13 +204,38 @@ const validateConfirmPassword = (rule, value, callback) => {
   }
 }
 
+// 与后端 internal/utils/password.go 的策略保持一致。
+// 前端校验只是即时反馈，后端会独立执行同样的检查 —— 绕过前端不会放宽任何限制。
+const validatePasswordStrength = (rule, value, callback) => {
+  if (!value) {
+    callback()
+    return
+  }
+  if (value.length < 10) {
+    callback(new Error('密码长度不能少于 10 位'))
+    return
+  }
+  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/]
+    .filter((re) => re.test(value)).length
+  if (classes < 3) {
+    callback(new Error('需包含小写字母、大写字母、数字、符号中的至少三类'))
+    return
+  }
+  if (value === passwordForm.old_password) {
+    callback(new Error('新密码不能与原密码相同'))
+    return
+  }
+  callback()
+}
+
 const passwordRules = {
   old_password: [
     { required: true, message: '请输入原密码', trigger: 'blur' }
   ],
   new_password: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 50, message: '密码长度为 6-50 个字符', trigger: 'blur' }
+    { max: 72, message: '密码长度不能超过 72 个字符', trigger: 'blur' },
+    { validator: validatePasswordStrength, trigger: 'blur' }
   ],
   confirm_password: [
     { required: true, message: '请确认新密码', trigger: 'blur' },

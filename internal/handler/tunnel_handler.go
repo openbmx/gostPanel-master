@@ -5,6 +5,7 @@ import (
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/service"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func (h *TunnelHandler) Create(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	tunnel, err := h.tunnelService.Create(&req, userID.(uint), username.(string), ip, ua)
@@ -61,7 +62,7 @@ func (h *TunnelHandler) Update(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	tunnel, err := h.tunnelService.Update(uint(id), &req, userID.(uint), username.(string), ip, ua)
@@ -84,7 +85,7 @@ func (h *TunnelHandler) Delete(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err := h.tunnelService.Delete(uint(id), userID.(uint), username.(string), ip, ua); err != nil {
@@ -140,7 +141,7 @@ func (h *TunnelHandler) Start(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err := h.tunnelService.Start(uint(id), userID.(uint), username.(string), ip, ua); err != nil {
@@ -162,7 +163,7 @@ func (h *TunnelHandler) Stop(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err := h.tunnelService.Stop(uint(id), userID.(uint), username.(string), ip, ua); err != nil {

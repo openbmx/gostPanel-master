@@ -5,6 +5,7 @@ import (
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/service"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	node, err := h.nodeService.Create(&req, userID.(uint), username.(string), ip, ua)
@@ -61,7 +62,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	node, err := h.nodeService.Update(uint(id), &req, userID.(uint), username.(string), ip, ua)
@@ -84,7 +85,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err = h.nodeService.Delete(uint(id), userID.(uint), username.(string), ip, ua); err != nil {
@@ -142,7 +143,7 @@ func (h *NodeHandler) GetCredentials(c *gin.Context) {
 	username, _ := c.Get("username")
 
 	creds, err := h.nodeService.GetCredentials(
-		uint(id), userID.(uint), username.(string), c.ClientIP(), c.GetHeader("User-Agent"))
+		uint(id), userID.(uint), username.(string), utils.ClientIP(c), c.GetHeader("User-Agent"))
 	if err != nil {
 		response.HandleError(c, err)
 		return

@@ -3,6 +3,7 @@ package handler
 import (
 	"gost-panel/internal/dto"
 	"gost-panel/internal/service"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +28,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	ip := c.ClientIP()
+	// 统一走规范化，保证审计日志与限流看到的是同一套地址表示
+	ip := utils.ClientIP(c)
 	userAgent := c.GetHeader("User-Agent")
 
 	result, err := h.authService.Login(&req, ip, userAgent)
@@ -65,7 +67,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 
 	userID, _ := c.Get("userID")
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	userAgent := c.GetHeader("User-Agent")
 
 	if err := h.authService.ChangePassword(userID.(uint), &req, ip, userAgent); err != nil {

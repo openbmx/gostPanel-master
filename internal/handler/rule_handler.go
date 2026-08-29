@@ -5,6 +5,7 @@ import (
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/service"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +33,7 @@ func (h *RuleHandler) Create(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	rule, err := h.ruleService.Create(&req, userID.(uint), username.(string), ip, ua)
@@ -61,7 +62,7 @@ func (h *RuleHandler) Update(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	rule, err := h.ruleService.Update(uint(id), &req, userID.(uint), username.(string), ip, ua)
@@ -84,7 +85,7 @@ func (h *RuleHandler) Delete(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err = h.ruleService.Delete(uint(id), userID.(uint), username.(string), ip, ua); err != nil {
@@ -140,7 +141,7 @@ func (h *RuleHandler) Start(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err = h.ruleService.Start(uint(id), userID.(uint), username.(string), ip, ua); err != nil {
@@ -162,7 +163,7 @@ func (h *RuleHandler) Stop(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	username, _ := c.Get("username")
 
-	ip := c.ClientIP()
+	ip := utils.ClientIP(c)
 	ua := c.GetHeader("User-Agent")
 
 	if err := h.ruleService.Stop(uint(id), userID.(uint), username.(string), ip, ua); err != nil {

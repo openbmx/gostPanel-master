@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"gost-panel/internal/dto"
 	"gost-panel/internal/service"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/logger"
 	"io"
 	"net/http"
@@ -36,7 +37,7 @@ func (h *ObserverHandler) Report(c *gin.Context) {
 		token = c.Query("token")
 	}
 	if err := h.observerService.VerifyReportToken(token); err != nil {
-		logger.Warnf("观察器上报鉴权失败: ip=%s", c.ClientIP())
+		logger.Warnf("观察器上报鉴权失败: ip=%s", utils.ClientIP(c))
 		c.JSON(http.StatusUnauthorized, dto.ObserverReportResp{OK: false})
 		return
 	}

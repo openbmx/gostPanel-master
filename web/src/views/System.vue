@@ -102,8 +102,147 @@
             </el-form-item>
           </el-form>
         </el-tab-pane>
+
+        <!-- 版本与更新 -->
+        <el-tab-pane label="版本与更新" name="update">
+          <div class="update-pane" v-loading="updateLoading">
+            <el-descriptions :column="2" border size="small" class="update-desc">
+              <el-descriptions-item label="当前版本">
+                {{ updateInfo.current_version || '未知' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最新版本">
+                <span v-if="updateInfo.latest_version">{{ updateInfo.latest_version }}</span>
+                <span v-else>—</span>
+                <el-tag v-if="updateInfo.has_update" type="warning" size="small" style="margin-left: 8px">
+                  有新版本
+                </el-tag>
+                <!-- 只有版本可比较时才敢说"已是最新"。
+                     dev 构建的版本号无法与发布版本比较，此时标"已是最新"是误导。 -->
+                <el-tag
+                  v-else-if="updateInfo.updatable && updateInfo.latest_version"
+                  type="success"
+                  size="small"
+                  style="margin-left: 8px"
+                >
+                  已是最新
+                </el-tag>
+                <el-tag v-else-if="updateInfo.latest_version" type="info" size="small" style="margin-left: 8px">
+                  无法比较
+                </el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <!-- 环境不支持时说明原因，而不是让按钮点了报错 -->
+            <el-alert
+              v-if="updateInfo.reason"
+              type="info"
+              :closable="false"
+              show-icon
+              class="update-alert"
+              :title="updateInfo.reason"
+            />
+            <el-alert
+              v-if="updateInfo.warning"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="update-alert"
+              :title="updateInfo.warning"
+            />
+
+            <div class="update-actions">
+              <el-button :loading="updateLoading" @click="handleCheckUpdate(true)">检查更新</el-button>
+              <el-button
+                type="primary"
+                :disabled="!canUpdate"
+                :loading="updating"
+                @click="handleUpdate"
+              >升级到 {{ updateInfo.latest_version || '最新版' }}</el-button>
+              <el-button
+                v-if="updateInfo.can_rollback"
+                type="warning"
+                plain
+                :loading="updating"
+                @click="handleRollbackBackup"
+              >回滚上一版本</el-button>
+              <el-button
+                v-if="updateInfo.updatable"
+                plain
+                @click="handleOpenRollbackDialog"
+              >回滚到指定版本</el-button>
+            </div>
+
+            <!-- 更新日志：刻意用纯文本渲染。
+                 release body 是 Markdown，引入渲染器等于把外部内容变成 HTML，
+                 既要放宽 CSP 又多一处 XSS 面，收益不成比例。 -->
+            <div v-if="updateInfo.release && updateInfo.release.body" class="release-notes">
+              <div class="release-notes-title">
+                更新日志（{{ updateInfo.release.version }}）
+                <a v-if="updateInfo.release.html_url" :href="updateInfo.release.html_url" target="_blank" rel="noopener noreferrer">
+                  在 GitHub 查看
+                </a>
+              </div>
+              <pre class="release-notes-body">{{ updateInfo.release.body }}</pre>
+            </div>
+
+            <el-alert
+              v-if="needRestart"
+              type="success"
+              :closable="false"
+              show-icon
+              class="update-alert"
+              title="更新已写入，需要重启面板才能生效"
+            >
+              <template #default>
+                <div style="margin-top: 8px">
+                  <el-button
+                    v-if="restartSupported"
+                    type="primary"
+                    size="small"
+                    :loading="restarting"
+                    @click="handleRestart"
+                  >立即重启</el-button>
+                  <span v-else>当前平台不支持自动重启，请手动重启面板服务。</span>
+                </div>
+              </template>
+            </el-alert>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- 回滚到指定版本 -->
+    <el-dialog v-model="rollbackVisible" title="回滚到指定版本" width="520px">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="回滚到旧版本可能与当前数据库结构不兼容，建议先执行一次备份。"
+      />
+      <el-table
+        v-loading="rollbackLoading"
+        :data="rollbackVersions"
+        highlight-current-row
+        @current-change="(row) => (selectedRollback = row)"
+        size="small"
+        border
+      >
+        <el-table-column prop="version" label="版本" width="140" />
+        <el-table-column prop="published_at" label="发布时间">
+          <template #default="{ row }">{{ formatTime(row.published_at) }}</template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="rollbackVisible = false">取消</el-button>
+        <el-button
+          type="warning"
+          :disabled="!selectedRollback"
+          :loading="updating"
+          @click="handleRollbackVersion"
+        >回滚到 {{ selectedRollback ? selectedRollback.version : '…' }}</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 测试邮件弹窗 -->
     <el-dialog v-model="testEmailVisible" title="发送测试邮件" width="400px">
@@ -125,9 +264,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getSystemConfig, updateSystemConfig, sendTestEmail, backupSystem } from '@/api/system'
+import {
+    getSystemConfig, updateSystemConfig, sendTestEmail, backupSystem,
+    checkUpdate, performUpdate, getRollbackVersions, rollback, restartPanel
+} from '@/api/system'
 
 // 服务端用该占位符表示"此密钥已设置但不回显真实值"。
 // 前端在载入时把它从表单值里剥离（否则用户点"显示密码"会看到这串内部标记），
@@ -185,6 +327,171 @@ const backupForm = reactive({
   autoBackup: false,
   retentionCount: 7
 })
+
+// ==================== 版本与在线更新 ====================
+
+const updateInfo = ref({})
+const updateLoading = ref(false)
+const updating = ref(false)
+const restarting = ref(false)
+const needRestart = ref(false)
+const restartSupported = ref(false)
+
+const rollbackVisible = ref(false)
+const rollbackLoading = ref(false)
+const rollbackVersions = ref([])
+const selectedRollback = ref(null)
+
+// 三个条件同时满足才允许点升级：环境支持、确有新版本、当前没有更新在跑
+const canUpdate = computed(() =>
+    !!updateInfo.value.updatable && !!updateInfo.value.has_update && !updateInfo.value.in_progress
+)
+
+const formatTime = (value) => {
+    if (!value) return '—'
+    const d = new Date(value)
+    return isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+
+const handleCheckUpdate = async (force = false) => {
+    updateLoading.value = true
+    try {
+        const res = await checkUpdate(force)
+        updateInfo.value = res.data || {}
+        restartSupported.value = !!updateInfo.value.restart_supported || restartSupported.value
+        if (force) {
+            ElMessage.success(updateInfo.value.has_update ? '发现新版本' : '当前已是最新版本')
+        }
+    } catch (error) {
+        console.error('检查更新失败:', error)
+    } finally {
+        updateLoading.value = false
+    }
+}
+
+const handleUpdate = async () => {
+    try {
+        await ElMessageBox.confirm(
+            `将从 ${updateInfo.value.current_version} 升级到 ${updateInfo.value.latest_version}。` +
+            '下载与校验可能需要几分钟，完成后需要重启面板生效。',
+            '确认升级',
+            { confirmButtonText: '开始升级', cancelButtonText: '取消', type: 'warning' }
+        )
+    } catch {
+        return
+    }
+
+    updating.value = true
+    try {
+        const res = await performUpdate()
+        needRestart.value = !!res.data?.need_restart
+        restartSupported.value = !!res.data?.restart_supported
+        ElMessage.success(res.message || '升级完成')
+        await handleCheckUpdate(false)
+    } catch (error) {
+        console.error('升级失败:', error)
+    } finally {
+        updating.value = false
+    }
+}
+
+const handleRollbackBackup = async () => {
+    try {
+        await ElMessageBox.confirm(
+            '将恢复上一次更新前保留的二进制备份，完成后需要重启面板生效。',
+            '确认回滚',
+            { confirmButtonText: '回滚', cancelButtonText: '取消', type: 'warning' }
+        )
+    } catch {
+        return
+    }
+
+    updating.value = true
+    try {
+        const res = await rollback()
+        needRestart.value = true
+        restartSupported.value = !!res.data?.restart_supported
+        ElMessage.success(res.message || '回滚完成')
+        await handleCheckUpdate(false)
+    } catch (error) {
+        console.error('回滚失败:', error)
+    } finally {
+        updating.value = false
+    }
+}
+
+const handleOpenRollbackDialog = async () => {
+    rollbackVisible.value = true
+    selectedRollback.value = null
+    rollbackLoading.value = true
+    try {
+        const res = await getRollbackVersions()
+        rollbackVersions.value = res.data || []
+        if (!rollbackVersions.value.length) {
+            ElMessage.info('没有可回滚的历史版本')
+        }
+    } catch (error) {
+        console.error('获取历史版本失败:', error)
+    } finally {
+        rollbackLoading.value = false
+    }
+}
+
+const handleRollbackVersion = async () => {
+    if (!selectedRollback.value) return
+
+    updating.value = true
+    try {
+        const res = await rollback(selectedRollback.value.version)
+        needRestart.value = true
+        restartSupported.value = !!res.data?.restart_supported
+        rollbackVisible.value = false
+        ElMessage.success(res.message || '回滚完成')
+        await handleCheckUpdate(false)
+    } catch (error) {
+        console.error('回滚失败:', error)
+    } finally {
+        updating.value = false
+    }
+}
+
+const handleRestart = async () => {
+    restarting.value = true
+    try {
+        await restartPanel()
+        ElMessage.success('面板正在重启，请稍候…')
+        // 轮询健康检查，恢复后刷新页面拿到新版本的前端资源
+        await waitForPanelBack()
+    } catch (error) {
+        console.error('重启失败:', error)
+        restarting.value = false
+    }
+}
+
+// 轮询直到面板重新可用。进程会先退出再由 systemd 拉起，
+// 期间请求必然失败，这里只关心"什么时候重新变得可用"。
+const waitForPanelBack = async () => {
+    const deadline = Date.now() + 60_000
+    // 先等一下，避免在旧进程尚未退出时就探到"可用"
+    await new Promise((r) => setTimeout(r, 2000))
+
+    while (Date.now() < deadline) {
+        try {
+            const resp = await fetch('/api/v1/health', { cache: 'no-store' })
+            if (resp.ok) {
+                ElMessage.success('面板已恢复，即将刷新页面')
+                setTimeout(() => window.location.reload(), 800)
+                return
+            }
+        } catch {
+            // 重启窗口内失败是预期的，继续等
+        }
+        await new Promise((r) => setTimeout(r, 2000))
+    }
+
+    restarting.value = false
+    ElMessage.warning('等待面板恢复超时，请手动刷新页面确认状态')
+}
 
 // 获取配置
 const fetchConfig = async () => {
@@ -294,10 +601,70 @@ const handleBackupNow = async () => {
 
 onMounted(() => {
     fetchConfig()
+    // 走缓存，不强制打 GitHub（未认证 API 每小时仅 60 次）
+    handleCheckUpdate(false)
 })
 </script>
 
 <style scoped>
+.update-pane {
+    max-width: 900px;
+}
+
+.update-desc {
+    margin-bottom: 16px;
+}
+
+.update-alert {
+    margin-bottom: 16px;
+}
+
+.update-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.release-notes {
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 16px;
+}
+
+.release-notes-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--el-fill-color-light);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.release-notes-title a {
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--el-color-primary);
+    text-decoration: none;
+}
+
+/* 更新日志按纯文本展示：release body 是外部内容，
+   不做 Markdown 渲染以避免引入 XSS 面并放宽 CSP */
+.release-notes-body {
+    margin: 0;
+    padding: 12px;
+    max-height: 320px;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    color: var(--el-text-color-regular);
+}
+
 .system-container {
   padding: 20px;
 }

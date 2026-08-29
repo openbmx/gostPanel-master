@@ -59,9 +59,30 @@ check_root() {
     fi
 }
 
-# 把旧版本安装（/usr/local/bin）迁移到新布局（/opt/gost-panel）。
-# 新布局是面板内在线更新的前提：二进制必须位于服务账号可写的目录。
-migrate_layout() {
+# ---------------------------------------------------------------------------
+# 老版本 -> 新版本的部署布局迁移
+#
+# 早期版本把二进制装在 /usr/local/bin 并以 root 运行，systemd 单元没有任何
+# 沙箱约束。新版本需要两项变化：
+#   1. 二进制移到服务账号可写的 /opt/gost-panel —— 这是面板内在线更新的前提
+#      （更新用 rename 替换二进制，rename 作用于目录项，进程须能写该目录）
+#   2. 以专用非 root 账号运行，并施加 systemd 沙箱约束
+#
+# 迁移全程幂等，且原单元会被备份；升级后的健康检查失败会一并回滚。
+# ---------------------------------------------------------------------------
+
+UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+UNIT_BACKUP=""
+
+# 从现有 systemd 单元中读取一个字段的值（取最后一次出现）
+unit_value() {
+    local key="$1"
+    [ -f "$UNIT_FILE" ] || return 0
+    grep -E "^${key}=" "$UNIT_FILE" | tail -n1 | cut -d= -f2- || true
+}
+
+# 迁移二进制位置
+migrate_binary_location() {
     if [ -f "$BIN_FILE" ]; then
         return 0
     fi
@@ -73,34 +94,159 @@ migrate_layout() {
     mkdir -p "$INSTALL_PATH"
     mv "$LEGACY_BIN" "$BIN_FILE"
     chmod +x "$BIN_FILE"
-
-    # systemd 单元里的 ExecStart 与 ReadWritePaths 都要跟着改
-    local unit="/etc/systemd/system/${SERVICE_NAME}.service"
-    if [ -f "$unit" ]; then
-        sed -i "s#^ExecStart=.*/gost-panel#ExecStart=${BIN_FILE}#" "$unit"
-        if grep -q '^ReadWritePaths=' "$unit"; then
-            # 已有该行则追加程序目录（幂等：已包含就不重复加）
-            grep -q "ReadWritePaths=.*${INSTALL_PATH}" "$unit" \
-                || sed -i "s#^ReadWritePaths=.*#& ${INSTALL_PATH}#" "$unit"
-        fi
-        systemctl daemon-reload
-    fi
-
-    # 目录归服务账号，否则面板内更新仍然无法替换二进制
-    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
-        chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_PATH" 2>/dev/null || true
-        chmod 750 "$INSTALL_PATH" 2>/dev/null || true
-    fi
-
     ok "已迁移到 ${BIN_FILE}"
+}
+
+# 确保存在专用服务账号
+ensure_service_user() {
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    info "创建服务账号 ${SERVICE_USER}..."
+    useradd --system --no-create-home --shell /usr/sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+        || adduser --system --no-create-home --shell /sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+        || adduser -S -H -s /sbin/nologin "${SERVICE_USER}" 2>/dev/null \
+        || true
+
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        ok "服务账号已创建"
+    else
+        warn "未能创建 ${SERVICE_USER} 账号，将继续以现有账号运行"
+    fi
+}
+
+# 校正各目录属主与权限
+fix_ownership() {
+    id -u "${SERVICE_USER}" >/dev/null 2>&1 || return 0
+
+    mkdir -p "$INSTALL_PATH" "$DATA_PATH" "$LOG_PATH"
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_PATH" "$DATA_PATH" "$LOG_PATH" 2>/dev/null || true
+    chmod 750 "$INSTALL_PATH" 2>/dev/null || true
+    chmod 700 "$DATA_PATH" 2>/dev/null || true
+    chmod 750 "$LOG_PATH" 2>/dev/null || true
+
+    # 配置含 JWT 密钥与初始口令，保持 root 所有、服务账号只读
+    if [ -f "$CONFIG_FILE" ]; then
+        chgrp "${SERVICE_USER}" "$CONFIG_FILE" 2>/dev/null || true
+        chmod 640 "$CONFIG_FILE" 2>/dev/null || true
+    fi
+
+    # 备份目录由面板运行时创建在工作目录下，可能还不存在
+    if [ -d "${DATA_PATH}/backups" ]; then
+        chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_PATH}/backups" 2>/dev/null || true
+        chmod 700 "${DATA_PATH}/backups" 2>/dev/null || true
+    fi
+}
+
+# 重写 systemd 单元为新版模板（含沙箱约束）
+rewrite_unit() {
+    local run_user="root"
+    id -u "${SERVICE_USER}" >/dev/null 2>&1 && run_user="${SERVICE_USER}"
+
+    # 幂等：单元已经是本函数会写出的样子就直接返回。
+    #
+    # 判断条件要对着实际会写入的 run_user 比，而不是硬编码 SERVICE_USER：
+    # 服务账号创建失败时会回退到 root，若按 SERVICE_USER 判断则永远不相等，
+    # 每次升级都会重写单元并留下一个新备份。
+    if [ -f "$UNIT_FILE" ] \
+        && [ "$(unit_value User)" = "$run_user" ] \
+        && [ "$(unit_value ExecStart)" = "${BIN_FILE} -c ${CONFIG_FILE}" ] \
+        && grep -q '^ProtectSystem=strict' "$UNIT_FILE" \
+        && grep -q "^ReadWritePaths=.*${INSTALL_PATH}" "$UNIT_FILE"; then
+        return 0
+    fi
+
+    info "更新 systemd 单元（运行账号: ${run_user}，附加沙箱约束）..."
+
+    if [ -f "$UNIT_FILE" ]; then
+        UNIT_BACKUP="${UNIT_FILE}.bak.$(date +%s)"
+        cp -p "$UNIT_FILE" "$UNIT_BACKUP"
+        info "原单元已备份: $UNIT_BACKUP"
+    fi
+
+    cat > "$UNIT_FILE" <<EOF
+[Unit]
+Description=Gost Panel Service
+Documentation=https://github.com/${REPO}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${run_user}
+Group=${run_user}
+WorkingDirectory=${DATA_PATH}
+ExecStart=${BIN_FILE} -c ${CONFIG_FILE}
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+ProtectSystem=strict
+# INSTALL_PATH 必须可写：面板内在线更新通过 rename 替换二进制
+ReadWritePaths=${DATA_PATH} ${LOG_PATH} ${INSTALL_PATH}
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    ok "systemd 单元已更新"
+}
+
+# 迁移历史遗留的数据库位置。
+# 早期配置里的 database.path 可能是相对路径（./gost-panel.db），
+# 相对于 WorkingDirectory 解析后就落在 DATA_PATH 下，通常无需搬动；
+# 这里只处理 root 运行遗留下来的属主问题。
+migrate_database() {
+    id -u "${SERVICE_USER}" >/dev/null 2>&1 || return 0
+    local db
+    db=$(grep -E '^\s*path:' "$CONFIG_FILE" 2>/dev/null | head -n1 | sed -E 's/.*path:\s*"?([^"]*)"?\s*$/\1/') || true
+    [ -n "$db" ] || return 0
+
+    # 相对路径按 WorkingDirectory 解析
+    case "$db" in
+        /*) ;;
+        *) db="${DATA_PATH}/$(basename "$db")" ;;
+    esac
+
+    for f in "$db" "${db}-wal" "${db}-shm"; do
+        [ -f "$f" ] && chown "${SERVICE_USER}:${SERVICE_USER}" "$f" 2>/dev/null || true
+    done
+}
+
+migrate_layout() {
+    migrate_binary_location
+    ensure_service_user
+    fix_ownership
+    migrate_database
+    rewrite_unit
 }
 
 # 前置检查：确认已安装
 check_installed() {
-    migrate_layout
+    # 旧版本装在 /usr/local/bin，这里两个位置都认；
+    # 实际的布局迁移放在 do_upgrade 中执行，以便被健康检查与回滚覆盖。
+    if [ ! -f "$BIN_FILE" ] && [ -f "$LEGACY_BIN" ]; then
+        info "检测到旧版安装布局（${LEGACY_BIN}），升级过程中会迁移到 ${INSTALL_PATH}"
+        BIN_FILE="$LEGACY_BIN"
+    fi
 
     if [ ! -f "$BIN_FILE" ]; then
-        err "未检测到已安装的 Gost Panel ($BIN_FILE)，请先使用 install_panel.sh 安装。"
+        err "未检测到已安装的 Gost Panel（${INSTALL_PATH}/gost-panel 或 ${LEGACY_BIN}），请先使用 install_panel.sh 安装。"
         exit 1
     fi
     if ! command -v systemctl >/dev/null 2>&1 || [ ! -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
@@ -210,13 +356,21 @@ download_binary() {
 
     verify_checksum "${TMP_DIR}/${asset}" "$asset"
 
+    # 兼容两种包内布局：GoReleaser 打包的叫 gost-panel，
+    # 而本功能上线前手工打包的版本叫 gost-panel-linux-<arch>。
     tar -zxf "${TMP_DIR}/${asset}" -C "${TMP_DIR}"
-    if [ ! -f "${TMP_DIR}/gost-panel-linux-${arch}" ]; then
+    NEW_BIN=""
+    for candidate in "${TMP_DIR}/gost-panel" "${TMP_DIR}/gost-panel-linux-${arch}"; do
+        if [ -f "$candidate" ]; then
+            NEW_BIN="$candidate"
+            break
+        fi
+    done
+    if [ -z "$NEW_BIN" ]; then
         err "压缩包内未找到 gost-panel 二进制"
         exit 1
     fi
-    chmod +x "${TMP_DIR}/gost-panel-linux-${arch}"
-    NEW_BIN="${TMP_DIR}/gost-panel-linux-${arch}"
+    chmod +x "$NEW_BIN"
     ok "下载完成"
 }
 
@@ -261,8 +415,18 @@ do_upgrade() {
     info "停止服务 ${SERVICE_NAME} ..."
     systemctl stop "$SERVICE_NAME" || true
 
+    # 布局迁移放在服务停止后、启动前执行，
+    # 这样它与二进制替换一起被随后的健康检查覆盖：任一环节出问题都会整体回滚。
+    migrate_layout
+
+    # migrate_layout 可能把 BIN_FILE 从旧位置切换到了新位置
+    BIN_FILE="${INSTALL_PATH}/gost-panel"
+
     info "替换二进制 ..."
     install -m 0755 "$NEW_BIN" "$BIN_FILE"
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        chown "${SERVICE_USER}:${SERVICE_USER}" "$BIN_FILE" 2>/dev/null || true
+    fi
 
     info "启动服务 ${SERVICE_NAME} ..."
     systemctl start "$SERVICE_NAME"
@@ -295,6 +459,13 @@ rollback() {
         install -m 0755 "$BACKUP_BIN" "$BIN_FILE"
         info "已还原旧二进制"
     fi
+    # 布局迁移会重写 systemd 单元；若新单元本身就是失败原因
+    # （例如沙箱约束与本机路径冲突），只还原二进制是不够的。
+    if [ -n "$UNIT_BACKUP" ] && [ -f "$UNIT_BACKUP" ]; then
+        cp -p "$UNIT_BACKUP" "$UNIT_FILE"
+        systemctl daemon-reload
+        info "已还原原 systemd 单元"
+    fi
     systemctl start "$SERVICE_NAME" || true
     err "已回滚到升级前版本。请查看日志: journalctl -u ${SERVICE_NAME} -n 80"
     [ -n "$DB_BACKUP" ] && info "数据库备份位于: $DB_BACKUP（未被修改）"
@@ -306,7 +477,13 @@ main() {
     check_installed
     download_binary
     backup_current
-    do_upgrade
+
+    # 放在 if 条件中调用：这样 set -e 在函数体内被挂起，
+    # 迁移或替换过程中的任何失败都会走到回滚，而不是直接退出脚本
+    # 留下一个半迁移的状态。
+    if ! do_upgrade; then
+        rollback
+    fi
 
     if health_check; then
         echo ""

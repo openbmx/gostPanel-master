@@ -1,0 +1,22 @@
+# npm audit 高危漏洞例外清单
+#
+# CI 默认对所有 high/critical 漏洞失败。确实无法立即升级时，在此登记例外。
+# 每条例外都必须写明缓解措施与到期日；到期后 CI 会重新变红，强制复查 ——
+# 这是为了避免例外变成"一挂三年没人管"的永久豁免。
+#
+# 字段说明：
+#   package     漏洞所在的包名（与 npm audit 输出一致）
+#   advisory    advisory 标识，GHSA / CVE / URL 均可（与 npm audit 输出一致）
+#   severity    high 或 critical，需与实际一致
+#   mitigation  为什么当前风险可接受，以及采取了什么缓解措施
+#   expires_on  到期日 YYYY-MM-DD，建议不超过 90 天
+#
+# 示例：
+#   - package: "some-build-tool"
+#     advisory: "GHSA-xxxx-xxxx-xxxx"
+#     severity: "high"
+#     mitigation: "仅构建期使用，不进入 dist 产物；上游修复版本尚未发布"
+#     expires_on: "2026-12-31"
+
+version: 1
+exceptions: []

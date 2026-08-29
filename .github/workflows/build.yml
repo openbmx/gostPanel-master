@@ -3,13 +3,14 @@ name: Build and Package
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build Binaries
+  test:
+    name: Test and Lint
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -17,8 +18,41 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
-        check-latest: true
+        go-version-file: go.mod
+        cache: true
+
+    # 前端产物是 embed 进二进制的，编译前必须让 dist 目录存在
+    - name: Prepare embed target
+      run: mkdir -p internal/router/dist && touch internal/router/dist/index.html
+
+    - name: go vet
+      run: go vet ./...
+
+    # 安全回归测试（密码重启保留、Token 吊销、上报鉴权、限流边界等）在这里执行。
+    # 此前 CI 只编译不跑测试，等于这些护栏在流水线上完全不生效。
+    - name: Unit tests
+      run: go test -count=1 ./...
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.64
+        args: --timeout=10m
+
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
 
     - name: Set up Node.js
       uses: actions/setup-node@v4

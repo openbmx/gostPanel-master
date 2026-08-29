@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck      # 未处理的错误返回值
+    - gosec         # 安全静态分析：硬编码凭据、弱随机数、不安全文件权限、SQL 拼接等
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  settings:
+    errcheck:
+      exclude-functions:
+        # 关闭响应体/文件句柄失败时无事可做，且都在 defer 中执行。
+        # 逐个包成 `defer func(){ _ = x.Close() }()` 只会增加噪音而不增加正确性。
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*net/http.Response).Body.Close
+
+    gosec:
+      excludes:
+        # G104 与 errcheck 重复，避免同一问题报两次
+        - G104
+        # G304：本项目按配置读取数据库/证书/备份文件，路径来自运维配置而非请求输入
+        - G304
+
+  exclusions:
+    rules:
+      # 测试代码允许弱随机数、明文口令常量等
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

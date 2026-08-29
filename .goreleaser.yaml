@@ -98,32 +98,44 @@ dockers:
 
 # 多架构 manifest：用户 docker pull 时按自身架构自动选择
 docker_manifests:
+  # 精确版本标签始终推送，预发布也可以按 :1.1.0-rc1 拉取验证
   - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}"
     image_templates:
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-arm64"
 
+  # 以下三个是浮动标签，预发布时必须跳过（skip_push: auto）。
+  # 否则一个 rc 版本会顶掉 :latest，所有按 :latest 部署的用户
+  # 会在下次 pull 时静默升到未验证的预发布版本。
   - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:latest"
+    skip_push: auto
     image_templates:
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-arm64"
 
-  # 次版本与主版本浮动标签，便于用户按 :1.0 / :1 跟随补丁更新
+  # 次版本与主版本浮动标签，便于用户按 :1.1 / :1 跟随补丁更新
   - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Major }}.{{ .Minor }}"
+    skip_push: auto
     image_templates:
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-arm64"
 
   - name_template: "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Major }}"
+    skip_push: auto
     image_templates:
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/gostpanel:{{ .Version }}-arm64"
 
 release:
   draft: false
-  # 固定为正式发布。用 auto 时任何带预发布标识的 tag（如误打的 v1.0.2-rc1）
-  # 都会被静默发成 preview，而面板的更新检查只认正式发布。
-  prerelease: "false"
+  # auto：tag 带预发布标识（如 v1.1.0-rc1）时发为 preview，否则发正式版。
+  #
+  # 这正是想要的语义：GitHub 的 /releases/latest 不返回 preview，
+  # 而面板的更新检查走的就是该接口 —— 预发布因此不会被推送给普通用户，
+  # 可以安全地用来验证发布流程。
+  # 反过来固定成 false 更危险：一个误打的 -rc1 tag 会被当作正式版发布，
+  # 并抢走 :latest 标签直接推给所有用户。
+  prerelease: auto
   name_template: "Gost Panel {{ .Version }}"
   # release 正文即 tag 的附注消息，面板「版本与更新」页会原样展示。
   # 打 tag 时请写清楚改了什么：git tag -a v1.2.0 -m "标题" -m "详细说明"

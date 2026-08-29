@@ -25,6 +25,8 @@ func NewSystemConfigService(repo *repository.SystemConfigRepository) *SystemConf
 //  1. 真实密钥不再离开服务端（此前 SMTP 密码是明文回显的）；
 //  2. 前端不必持有真实值也能安全提交表单 —— 此前 Turnstile Secret 因为不在
 //     响应里，保存任何一个设置项都会把它清空，导致人机验证失效甚至无法登录。
+//
+// #nosec G101 -- 这是一个哨兵标记，不是凭据；真实密钥永远不会离开服务端
 const SecretPlaceholder = "__GOSTPANEL_UNCHANGED__"
 
 // maskSecret 已设置则返回占位符，未设置返回空串

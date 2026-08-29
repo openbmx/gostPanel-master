@@ -59,12 +59,13 @@ func Init(cfg *Config) error {
 	} else {
 		// 确保日志目录存在
 		logDir := filepath.Dir(cfg.Output)
-		if err = os.MkdirAll(logDir, 0755); err != nil {
+		// 日志含审计记录与来源 IP，不应对同主机的其他用户开放
+		if err = os.MkdirAll(logDir, 0o750); err != nil {
 			return err
 		}
 
 		// 打开日志文件
-		file, err := os.OpenFile(cfg.Output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		file, err := os.OpenFile(cfg.Output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return err
 		}

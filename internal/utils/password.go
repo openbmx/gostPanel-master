@@ -23,26 +23,27 @@ const (
 // commonWeakPasswords 常见弱口令与本项目历史出厂口令。
 // 不追求完整字典，只拦截最高频的几类，避免"合规但一撞就中"的口令。
 var commonWeakPasswords = map[string]struct{}{
-	"admin123":     {},
-	"admin1234":    {},
-	"admin12345":   {},
-	"password":     {},
-	"password1":    {},
-	"password123":  {},
-	"passw0rd":     {},
-	"12345678":     {},
-	"123456789":    {},
-	"1234567890":   {},
-	"qwertyuiop":   {},
-	"1qaz2wsx":     {},
-	"abc123456":    {},
+	"admin123":      {},
+	"admin1234":     {},
+	"admin12345":    {},
+	"password":      {},
+	"password1":     {},
+	"password123":   {},
+	"passw0rd":      {},
+	"12345678":      {},
+	"123456789":     {},
+	"1234567890":    {},
+	"qwertyuiop":    {},
+	"1qaz2wsx":      {},
+	"abc123456":     {},
 	"administrator": {},
-	"gostpanel":    {},
-	"gost123456":   {},
+	"gostpanel":     {},
+	"gost123456":    {},
 	"zxcvbnm123456": {},
 }
 
 // PasswordPolicyDescription 供前端与错误提示复用的策略描述
+// #nosec G101 -- 这是展示给用户的策略说明文案，不含任何凭据
 const PasswordPolicyDescription = "密码至少 10 位，且需包含小写字母、大写字母、数字、符号中的至少三类"
 
 // ValidatePasswordStrength 校验口令是否满足强度策略。

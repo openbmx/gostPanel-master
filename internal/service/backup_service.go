@@ -17,6 +17,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// 备份文件是整个 SQLite 数据库的副本，其中包含所有节点的 GOST API 明文密码、
+// SMTP 密码、Turnstile Secret 与上报令牌。此前目录建为 0755、文件继承 umask
+// （通常 0644），同主机上的任何本地用户都能直接读走这些凭据。
+const (
+	backupDirPerm  = 0o700
+	backupFilePerm = 0o600
+)
+
 // BackupService 备份服务
 type BackupService struct {
 	db      *gorm.DB
@@ -75,7 +83,7 @@ func (s *BackupService) processAutoBackup() {
 
 	backupDir := "backups"
 	// 确保目录存在
-	if err = os.MkdirAll(backupDir, 0755); err != nil {
+	if err = os.MkdirAll(backupDir, backupDirPerm); err != nil {
 		logger.Errorf("自动备份失败: 无法创建目录: %v", err)
 		return
 	}
@@ -116,7 +124,7 @@ func (s *BackupService) CreateBackup() error {
 
 	// 确保备份目录存在
 	backupDir := "backups"
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	if err := os.MkdirAll(backupDir, backupDirPerm); err != nil {
 		return errors.ErrBackupDirCreateFailed
 	}
 
@@ -131,6 +139,14 @@ func (s *BackupService) CreateBackup() error {
 		if err := copyFile(dbPath, targetPath); err != nil {
 			return errors.ErrBackupFailed
 		}
+	}
+
+	// VACUUM INTO 由 SQLite 创建文件，权限取决于 umask（常见为 0644）。
+	// 备份含全部明文凭据，必须收紧到仅属主可读。
+	if err := os.Chmod(targetPath, backupFilePerm); err != nil {
+		logger.Errorf("收紧备份文件权限失败，为避免凭据泄露已删除该备份 %s: %v", targetPath, err)
+		_ = os.Remove(targetPath)
+		return errors.ErrBackupFailed
 	}
 
 	logger.Infof("数据库备份成功: %s", targetPath)
@@ -199,7 +215,8 @@ func copyFile(src, dst string) error {
 		_ = sourceFile.Close()
 	}(sourceFile)
 
-	destFile, err := os.Create(dst)
+	// 直接用 OpenFile 指定权限，避免 os.Create 的 0666&^umask 让备份可被他人读取
+	destFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, backupFilePerm)
 	if err != nil {
 		return err
 	}

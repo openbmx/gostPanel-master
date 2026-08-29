@@ -44,12 +44,21 @@ jobs:
           # 打包 Windows
           zip gost-panel-windows-amd64.zip gost-panel-windows-amd64.exe config/config.yaml
 
+      # 生成校验和。这是面板内自更新与升级脚本校验完整性的唯一依据：
+      # 没有它，更新流程就退化成"下载什么就执行什么"。
+      # 格式与 sha256sum 默认输出一致（"<hash>  <filename>"），便于 sha256sum -c 直接使用。
+      - name: Generate checksums
+        run: |
+          sha256sum gost-panel-*.tar.gz gost-panel-*.zip > checksums.txt
+          cat checksums.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             *.tar.gz
             *.zip
+            checksums.txt
           generate_release_notes: true
           draft: false
           prerelease: false

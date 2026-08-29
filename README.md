@@ -41,10 +41,15 @@
 ## 🚀 快速部署
 
 ### 默认账户
-> ⚠️ 部署后请务必修改默认密码，并设置强随机 `JWT Secret`！
 - **访问地址**: `http://IP:39100` （默认端口）
 - **用户名**: `admin`
-- **密码**: 一键脚本部署时随机生成；手动/Docker 部署默认 `admin123`（请立即修改）
+- **密码**: **首次启动时随机生成并打印到标准错误输出**（一键脚本会直接显示；Docker 用 `docker compose logs gostpanel | grep 随机初始密码` 查看）。也可用 `GOSTPANEL_ADMIN_PASSWORD` 指定。
+
+> 你在面板中修改的密码保存在数据库里，**重启与升级都不会被配置文件覆盖**。
+> 若遗忘密码，把 `admin.force_reset` 临时设为 `true` 启动一次即可重置（重置后会吊销所有已签发的 Token，记得改回 `false`）。
+
+> ⚠️ **公网部署前请启用 HTTPS**（配置 `server.tls` 或前置反向代理）。面板以明文 HTTP 运行时，登录口令与 Token 均可被链路上的任何人读取。
+> 若使用反向代理，务必同时配置 `server.trusted_proxies`，否则限流与审计日志中的来源 IP 会全部变成代理地址。
 
 ### ⭐ 方式 0：一键管理脚本（最简单，推荐新手）
 
@@ -167,13 +172,28 @@ GOST_VERSION=3.2.6 \
 | 环境变量 | 说明 |
 | :--- | :--- |
 | `GOSTPANEL_SERVER_PORT` | 监听地址，如 `:39100` |
+| `GOSTPANEL_SERVER_TRUSTED_PROXIES` | 受信任的反向代理 CIDR，逗号分隔。**留空 = 不信任任何代理**，忽略 `X-Forwarded-For` |
+| `GOSTPANEL_SERVER_CORS_ORIGINS` | 允许跨域访问 API 的来源，逗号分隔。留空 = 不允许跨域（同源部署无需配置） |
+| `GOSTPANEL_SERVER_TLS_ENABLED` | 启用 HTTPS（需同时提供证书与私钥） |
+| `GOSTPANEL_SERVER_TLS_CERT_FILE` / `GOSTPANEL_SERVER_TLS_KEY_FILE` | 证书与私钥路径 |
 | `GOSTPANEL_JWT_SECRET` | JWT 签名密钥（**生产环境必填**，留空将自动生成随机密钥） |
-| `GOSTPANEL_ADMIN_USERNAME` | 初始管理员用户名 |
-| `GOSTPANEL_ADMIN_PASSWORD` | 初始管理员密码 |
+| `GOSTPANEL_ADMIN_USERNAME` | 管理员用户名 |
+| `GOSTPANEL_ADMIN_PASSWORD` | **初始**管理员密码，仅在账号不存在时生效 |
+| `GOSTPANEL_ADMIN_FORCE_RESET` | 应急重置开关，`true` 时把密码强制重置为上面的值并吊销所有 Token |
 | `GOSTPANEL_DATABASE_PATH` | SQLite 数据库文件路径 |
 | `GOSTPANEL_LOG_LEVEL` | 日志级别（debug/info/warn/error） |
 
-> 若未配置 `JWT_SECRET` 或仍使用弱默认值，启动时会在 stderr 打印安全告警并自动生成随机密钥（重启后已签发的 Token 会失效）。
+> - 若未配置 `JWT_SECRET` 或仍使用弱默认值，启动时会在 stderr 打印安全告警并自动生成随机密钥（重启后已签发的 Token 会失效）。
+> - 未配置 `ADMIN_PASSWORD` 时，首次创建管理员账号会生成随机密码并打印到 stderr。
+> - `trusted_proxies` 留空时，登录限流与操作日志使用 TCP 连接的真实对端地址，不受 `X-Forwarded-For` 影响。
+
+### 关于安全的几点说明
+
+- **管理员密码**：账号创建后，密码的唯一来源是数据库。配置文件中的 `admin.password` 只用于首次创建，重启/升级不会覆盖你改过的密码。
+- **节点凭据**：节点的 GOST API 密码不随节点列表下发，仅在点击「安装命令」时通过独立接口获取，且每次获取都会记入操作日志。编辑节点时密码留空表示不修改。
+- **流量上报**：`/api/v1/observer/report` 使用面板自动生成的独立令牌鉴权，令牌会随观察器配置下发到各节点。从旧版本升级时，节点上的观察器会在下次启动规则/隧道时自动更新为带令牌的地址。
+- **改密即登出**：修改密码会立即使此前签发的所有 Token 失效。
+- **审计**：登录失败、节点凭据查看等敏感操作均记入操作日志，可在「操作日志」页查询。
 
 ## 🕹️ 使用指南
 

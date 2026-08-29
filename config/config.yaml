@@ -17,6 +17,13 @@ server:
   #   - "https://panel.example.com"
   cors_origins: []
 
+  # HTTP 超时与请求头上限。默认值面向面板这类短请求场景。
+  read_header_timeout: 10    # 完整读取请求头的最大秒数，限制慢速请求头攻击
+  read_timeout: 60           # 读取整个请求（含请求体）的最大秒数
+  write_timeout: 120         # 写出响应的最大秒数
+  idle_timeout: 120          # Keep-Alive 空闲连接超时（秒）
+  max_header_bytes: 65536    # 请求头上限（64 KiB）
+
   # HTTPS。强烈建议在公网暴露前启用，否则登录口令与 Token 均为明文传输。
   # 也可以保持关闭，改由前置的 Nginx/Caddy 终结 TLS（此时需配置 trusted_proxies）。
   tls:

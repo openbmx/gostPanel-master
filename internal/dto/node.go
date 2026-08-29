@@ -5,13 +5,13 @@ package dto
 
 // CreateNodeReq 创建节点请求
 type CreateNodeReq struct {
-	Name     string `json:"name" binding:"required,min=1,max=100"`      // 节点名称
-	Address  string `json:"address" binding:"required,max=255"`         // IP 或域名
-	Port     int    `json:"port" binding:"required,min=1,max=65535"`    // 端口
+	Name     string `json:"name" binding:"required,min=1,max=100"`       // 节点名称
+	Address  string `json:"address" binding:"required,max=255"`          // IP 或域名
+	Port     int    `json:"port" binding:"required,min=1,max=65535"`     // 端口
 	Scheme   string `json:"scheme" binding:"omitempty,oneof=http https"` // 节点 API 协议，默认 http
-	Username string `json:"username" binding:"max=50"`                  // API 认证用户名
-	Password string `json:"password" binding:"max=255"`                 // API 认证密码
-	Remark   string `json:"remark" binding:"max=1000"`                  // 备注
+	Username string `json:"username" binding:"max=50"`                   // API 认证用户名
+	Password string `json:"password" binding:"max=255"`                  // API 认证密码
+	Remark   string `json:"remark" binding:"max=1000"`                   // 备注
 }
 
 // UpdateNodeReq 更新节点请求

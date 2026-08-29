@@ -48,6 +48,18 @@ type ServerConfig struct {
 	// 仅在前端被单独部署到其他域名时才需要填写。切勿填 "*"。
 	CORSOrigins []string `mapstructure:"cors_origins"`
 
+	// ReadHeaderTimeout 完整读取请求头的最大秒数，用于限制慢速请求头攻击。
+	// 不限制请求体读取与响应写出。
+	ReadHeaderTimeout int `mapstructure:"read_header_timeout"`
+	// ReadTimeout 读取整个请求（含请求体）的最大秒数
+	ReadTimeout int `mapstructure:"read_timeout"`
+	// WriteTimeout 写出响应的最大秒数
+	WriteTimeout int `mapstructure:"write_timeout"`
+	// IdleTimeout Keep-Alive 空闲连接超时秒数
+	IdleTimeout int `mapstructure:"idle_timeout"`
+	// MaxHeaderBytes 请求头上限（字节），同时约束 HTTP/2 header list
+	MaxHeaderBytes int `mapstructure:"max_header_bytes"`
+
 	// TLS HTTPS 配置
 	TLS TLSConfig `mapstructure:"tls"`
 }
@@ -107,6 +119,8 @@ func Load(configPath string) (*Config, error) {
 	for _, key := range []string{
 		"server.port", "server.mode", "server.trusted_proxies", "server.cors_origins",
 		"server.tls.enabled", "server.tls.cert_file", "server.tls.key_file",
+		"server.read_header_timeout", "server.read_timeout", "server.write_timeout",
+		"server.idle_timeout", "server.max_header_bytes",
 		"database.type", "database.path",
 		"jwt.secret", "jwt.expire",
 		"log.level", "log.format", "log.output",
@@ -161,6 +175,24 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Server.Mode == "" {
 		cfg.Server.Mode = "debug"
+	}
+
+	// HTTP 服务超时与请求头上限。
+	// 默认值面向"面板"这类短请求场景；若前面挂了慢速链路可适当放大。
+	if cfg.Server.ReadHeaderTimeout <= 0 {
+		cfg.Server.ReadHeaderTimeout = 10
+	}
+	if cfg.Server.ReadTimeout <= 0 {
+		cfg.Server.ReadTimeout = 60
+	}
+	if cfg.Server.WriteTimeout <= 0 {
+		cfg.Server.WriteTimeout = 120
+	}
+	if cfg.Server.IdleTimeout <= 0 {
+		cfg.Server.IdleTimeout = 120
+	}
+	if cfg.Server.MaxHeaderBytes <= 0 {
+		cfg.Server.MaxHeaderBytes = 64 << 10 // 64 KiB
 	}
 
 	// 数据库默认配置

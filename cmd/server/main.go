@@ -123,13 +123,13 @@ func main() {
 	srv := &http.Server{
 		Addr:    cfg.Server.Port,
 		Handler: engine,
-		// 防止慢速连接长期占用资源
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// 防止慢速连接长期占用资源；具体数值可通过 server.* 配置调整
+		ReadHeaderTimeout: time.Duration(cfg.Server.ReadHeaderTimeout) * time.Second,
+		ReadTimeout:       time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		WriteTimeout:      time.Duration(cfg.Server.WriteTimeout) * time.Second,
+		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 		// 限制请求头大小，配合中间件里的 Token 长度检查
-		MaxHeaderBytes: 1 << 20, // 1 MiB
+		MaxHeaderBytes: cfg.Server.MaxHeaderBytes,
 	}
 
 	// 启动服务器

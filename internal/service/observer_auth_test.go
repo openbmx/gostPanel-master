@@ -140,10 +140,10 @@ func TestParseServiceID(t *testing.T) {
 	}{
 		{"rule-7", "rule-", 7, false},
 		{"relay-tunnel-42", "relay-tunnel-", 42, false},
-		{"rule-abc", "rule-", 0, true},   // 旧实现会静默得到 0
-		{"rule-", "rule-", 0, true},      // 旧实现会静默得到 0
-		{"rule-0", "rule-", 0, true},     // ID 0 不是合法主键
-		{"rule--1", "rule-", 0, true},    // 负数
+		{"rule-abc", "rule-", 0, true},                  // 旧实现会静默得到 0
+		{"rule-", "rule-", 0, true},                     // 旧实现会静默得到 0
+		{"rule-0", "rule-", 0, true},                    // ID 0 不是合法主键
+		{"rule--1", "rule-", 0, true},                   // 负数
 		{"rule-99999999999999999999", "rule-", 0, true}, // 溢出
 	}
 

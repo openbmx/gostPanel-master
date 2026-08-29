@@ -64,12 +64,20 @@ func (h *SystemConfigHandler) UpdateConfig(c *gin.Context) {
 func (h *SystemConfigHandler) TestEmail(c *gin.Context) {
 	var req dto.EmailConfigReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "请求参数错误: "+err.Error())
+		response.BadRequest(c, "请求参数错误")
 		return
 	}
 
+	// 前端持有的是密码占位符，这里换回真实值再发送
+	password, err := h.systemConfigService.ResolveSMTPPassword(req.Password)
+	if err != nil {
+		response.HandleError(c, err)
+		return
+	}
+	req.Password = password
+
 	if err := h.systemConfigService.SendTestEmail(&req); err != nil {
-		response.Error(c, 500, 50001, "发送失败: "+err.Error())
+		response.HandleError(c, err)
 		return
 	}
 
@@ -79,7 +87,7 @@ func (h *SystemConfigHandler) TestEmail(c *gin.Context) {
 // Backup 立即备份
 func (h *SystemConfigHandler) Backup(c *gin.Context) {
 	if err := h.backupService.CreateBackup(); err != nil {
-		response.Error(c, 500, 50002, "备份失败: "+err.Error())
+		response.HandleError(c, err)
 		return
 	}
 

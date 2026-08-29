@@ -25,9 +25,23 @@ func NewObserverHandler(observerService *service.ObserverService) *ObserverHandl
 const maxObserverBodyBytes = 4 << 20 // 4 MiB
 
 // Report 接收 GOST 观察器上报的数据
-// POST /api/v1/observer/report
+// POST /api/v1/observer/report?token=<观察器令牌>
 func (h *ObserverHandler) Report(c *gin.Context) {
-	// 1. 读取原始 Body（限制最大体积，避免未认证端点被滥用导致 OOM）
+	// 0. 鉴权。
+	// 该接口无法使用管理员 JWT（调用方是各节点上的 GOST 进程），改用面板下发的
+	// 独立令牌。此前这里完全没有校验，任何人都能匿名写入规则/隧道/节点的流量统计。
+	// 令牌优先从请求头取，其次兼容查询参数（GOST 的 http 插件只能配置 URL）。
+	token := c.GetHeader("X-Observer-Token")
+	if token == "" {
+		token = c.Query("token")
+	}
+	if err := h.observerService.VerifyReportToken(token); err != nil {
+		logger.Warnf("观察器上报鉴权失败: ip=%s", c.ClientIP())
+		c.JSON(http.StatusUnauthorized, dto.ObserverReportResp{OK: false})
+		return
+	}
+
+	// 1. 读取原始 Body（限制最大体积，避免端点被滥用导致 OOM）
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxObserverBodyBytes)
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {

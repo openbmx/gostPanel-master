@@ -515,21 +515,29 @@ func (c *Client) DeleteLimiter(name string) error {
 	return nil
 }
 
-// CreateObserver 创建观察器 (幂等)
-func (c *Client) CreateObserver(observer *ObserverConfig) error {
+// UpsertObserver 创建或更新观察器。
+//
+// 与旧的 CreateObserver 不同：观察器已存在时不再直接跳过，而是用 PUT 覆盖为
+// 最新配置。这一点对安全升级是必需的 —— 上报回调 URL 里现在带有鉴权令牌，
+// 若沿用"已存在就跳过"的逻辑，从旧版本升级上来的节点会永远保留不带令牌的
+// 旧 URL，上报将全部被拒。
+func (c *Client) UpsertObserver(observer *ObserverConfig) error {
 	path := fmt.Sprintf("/config/observers/%s", observer.Name)
+
+	method, target := "POST", "/config/observers"
 	if c.exists(path) {
-		logger.Debugf("观察器 %s 已存在，跳过创建", observer.Name)
-		return nil
+		method, target = "PUT", path
 	}
 
-	resp, err := c.doRequest("POST", "/config/observers", observer)
+	resp, err := c.doRequest(method, target, observer)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Warnf("写入观察器失败: method=%s status=%d body=%s", method, resp.StatusCode, string(body))
 		return errors.ErrTunnelObserverCreateFailed
 	}
 

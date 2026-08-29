@@ -129,6 +129,28 @@ func (h *NodeHandler) List(c *gin.Context) {
 	response.SuccessPage(c, nodes, total, req.Page, req.PageSize)
 }
 
+// GetCredentials 获取节点 API 凭据（用于生成安装命令）
+// 安全：唯一会返回节点密码的接口，每次调用都会写入操作日志
+func (h *NodeHandler) GetCredentials(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "无效的节点 ID")
+		return
+	}
+
+	userID, _ := c.Get("userID")
+	username, _ := c.Get("username")
+
+	creds, err := h.nodeService.GetCredentials(
+		uint(id), userID.(uint), username.(string), c.ClientIP(), c.GetHeader("User-Agent"))
+	if err != nil {
+		response.HandleError(c, err)
+		return
+	}
+
+	response.Success(c, creds)
+}
+
 // GetConfig 获取节点配置
 func (h *NodeHandler) GetConfig(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)

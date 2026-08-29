@@ -1,13 +1,18 @@
 package service
 
 import (
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+
 	"gost-panel/internal/dto"
 	"gost-panel/internal/errors"
 	"gost-panel/internal/model"
 	"gost-panel/internal/repository"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/gost"
 	"gost-panel/pkg/logger"
-	"strings"
 
 	"gorm.io/gorm"
 )
@@ -17,6 +22,7 @@ type ObserverService struct {
 	ruleRepo   *repository.RuleRepository
 	nodeRepo   *repository.NodeRepository
 	tunnelRepo *repository.TunnelRepository
+	sysRepo    *repository.SystemConfigRepository
 }
 
 // NewObserverService 创建观察器服务
@@ -25,6 +31,7 @@ func NewObserverService(db *gorm.DB) *ObserverService {
 		ruleRepo:   repository.NewRuleRepository(db),
 		nodeRepo:   repository.NewNodeRepository(db),
 		tunnelRepo: repository.NewTunnelRepository(db),
+		sysRepo:    repository.NewSystemConfigRepository(db),
 	}
 }
 
@@ -122,7 +129,7 @@ func hasMeaningfulStats(stats *dto.ObserverStats) bool {
 func (s *ObserverService) updateRuleStats(serviceName, rawServiceName string, stats *dto.ObserverStats, prefix string) error {
 	// 解析 ID
 	var id uint
-	if _, err := parseServiceID(serviceName, prefix, &id); err != nil {
+	if err := parseServiceID(serviceName, prefix, &id); err != nil {
 		return err
 	}
 
@@ -164,7 +171,7 @@ func (s *ObserverService) updateRuleStats(serviceName, rawServiceName string, st
 func (s *ObserverService) updateTunnelStats(serviceName string, stats *dto.ObserverStats, prefix string) error {
 	// 解析 ID
 	var id uint
-	if _, err := parseServiceID(serviceName, prefix, &id); err != nil {
+	if err := parseServiceID(serviceName, prefix, &id); err != nil {
 		return err
 	}
 
@@ -191,33 +198,24 @@ func (s *ObserverService) updateTunnelStats(serviceName string, stats *dto.Obser
 	return nil
 }
 
-// parseServiceID 从服务名称解析 ID
-func parseServiceID(serviceName, prefix string, id *uint) (bool, error) {
-	if !strings.HasPrefix(serviceName, prefix) {
-		return false, nil
-	}
-
+// parseServiceID 从服务名称解析 ID。
+//
+// 旧实现遇到非数字后缀（如 "rule-abc"）或空后缀（"rule-"）时会静默返回 0，
+// 调用方又忽略了返回的 bool，于是会拿 id=0 去更新统计 —— 写入一条不存在的记录。
+// 溢出同样没有防护。这里改用 strconv 并显式拒绝 0。
+func parseServiceID(serviceName, prefix string, id *uint) error {
 	idStr := strings.TrimPrefix(serviceName, prefix)
-	var parsedID uint
-	if _, err := parseUint(idStr, &parsedID); err != nil {
-		return false, err
+
+	parsed, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("无法从服务名 %q 解析 ID: %w", serviceName, err)
+	}
+	if parsed == 0 {
+		return fmt.Errorf("服务名 %q 中的 ID 无效", serviceName)
 	}
 
-	*id = parsedID
-	return true, nil
-}
-
-// parseUint 解析无符号整数
-func parseUint(s string, result *uint) (bool, error) {
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false, nil
-		}
-		n = n*10 + int(c-'0')
-	}
-	*result = uint(n)
-	return true, nil
+	*id = uint(parsed)
+	return nil
 }
 
 // EnsureGlobalObserver 确保全局流量监控观察器存在
@@ -225,9 +223,23 @@ func parseUint(s string, result *uint) (bool, error) {
 func EnsureGlobalObserver(client *gost.Client, sysRepo *repository.SystemConfigRepository) (string, error) {
 	// 获取系统配置中的面板地址
 	sysConfig, err := sysRepo.Get()
-	if err != nil || sysConfig.PanelURL == "" {
+	if err != nil {
+		logger.Errorf("读取系统配置失败: %v", err)
+		return "", errors.ErrObserverCreateFailed
+	}
+	if sysConfig.PanelURL == "" {
 		return "", errors.ErrPanelURLNotFound
 	}
+	if sysConfig.ObserverToken == "" {
+		logger.Errorf("上报令牌为空，无法配置观察器")
+		return "", errors.ErrObserverCreateFailed
+	}
+
+	// 安全：上报接口无法使用管理员 JWT（调用方是节点上的 GOST 进程），
+	// 因此把独立的高熵令牌带在回调 URL 的查询参数里。
+	// 面板端会以恒定时间比较校验该令牌。
+	reportURL := strings.TrimRight(sysConfig.PanelURL, "/") +
+		"/api/v1/observer/report?token=" + url.QueryEscape(sysConfig.ObserverToken)
 
 	// 使用固定名称，确保每个节点只有一个观察器
 	observerName := "observer-global"
@@ -235,16 +247,39 @@ func EnsureGlobalObserver(client *gost.Client, sysRepo *repository.SystemConfigR
 		Name: observerName,
 		Plugin: &gost.PluginConfig{
 			Type:    "http",
-			Addr:    sysConfig.PanelURL + "/api/v1/observer/report",
+			Addr:    reportURL,
 			Timeout: "10s",
 		},
 	}
 
-	if err = client.CreateObserver(observer); err != nil {
+	// 用 Upsert 而非 Create：从旧版本升级上来的节点上已存在一个不带令牌的
+	// 观察器，必须覆盖掉，否则它的上报会被新的鉴权拦下。
+	if err = client.UpsertObserver(observer); err != nil {
 		logger.Warnf("创建/更新观察器失败: %v", err)
 		return "", errors.ErrObserverCreateFailed
 	}
 
-	logger.Infof("确保观察器存在: %s (URL: %s)", observerName, sysConfig.PanelURL)
+	// 日志中不打印带令牌的完整 URL
+	logger.Infof("确保观察器存在: %s (面板地址: %s)", observerName, sysConfig.PanelURL)
 	return observerName, nil
+}
+
+// VerifyReportToken 校验节点上报请求携带的令牌
+func (s *ObserverService) VerifyReportToken(token string) error {
+	if token == "" {
+		return errors.ErrObserverTokenInvalid
+	}
+
+	config, err := s.sysRepo.Get()
+	if err != nil {
+		logger.Errorf("读取上报令牌失败: %v", err)
+		return errors.ErrInternal
+	}
+	if config.ObserverToken == "" {
+		return errors.ErrObserverTokenInvalid
+	}
+	if !utils.SecureCompare(config.ObserverToken, token) {
+		return errors.ErrObserverTokenInvalid
+	}
+	return nil
 }

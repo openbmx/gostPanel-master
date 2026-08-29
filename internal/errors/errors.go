@@ -128,6 +128,32 @@ var (
 	ErrTokenGenerationFailed = New(10306, "Token 生成失败", http.StatusInternalServerError)
 	// ErrTurnstileVerificationFailed Turnstile 验证失败
 	ErrTurnstileVerificationFailed = New(10307, "人机验证失败，请刷新后重试", http.StatusUnauthorized)
+	// ErrTokenRevoked Token 已被吊销（改密后签发的旧 Token）
+	ErrTokenRevoked = New(10308, "登录状态已失效，请重新登录", http.StatusUnauthorized)
+	// ErrPasswordReused 新密码与原密码相同
+	ErrPasswordReused = New(10309, "新密码不能与原密码相同", http.StatusBadRequest)
+)
+
+// ==================== 口令强度策略 (1031x) ====================
+
+var (
+	// ErrPasswordTooShort 口令过短
+	ErrPasswordTooShort = New(10310, "密码长度不能少于 10 位", http.StatusBadRequest)
+	// ErrPasswordTooLong 口令过长（bcrypt 上限 72 字节）
+	ErrPasswordTooLong = New(10311, "密码长度不能超过 72 字节", http.StatusBadRequest)
+	// ErrPasswordTooCommon 命中常见弱口令字典
+	ErrPasswordTooCommon = New(10312, "该密码过于常见，请更换", http.StatusBadRequest)
+	// ErrPasswordTooSimple 字符类别不足
+	ErrPasswordTooSimple = New(10313, "密码需包含小写字母、大写字母、数字、符号中的至少三类", http.StatusBadRequest)
+)
+
+// ==================== 观察器上报鉴权 (1042x) ====================
+
+var (
+	// ErrObserverTokenInvalid 上报令牌无效
+	ErrObserverTokenInvalid = New(10420, "上报令牌无效", http.StatusUnauthorized)
+	// ErrTurnstileConfigIncomplete 开启人机验证但密钥不完整
+	ErrTurnstileConfigIncomplete = New(10421, "开启人机验证需要同时填写 Site Key 与 Secret Key", http.StatusBadRequest)
 )
 
 // ==================== 系统/配置相关错误 (104xx) ====================

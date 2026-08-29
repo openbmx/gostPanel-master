@@ -48,9 +48,27 @@ func (r *UserRepository) Update(user *model.User) error {
 	return r.DB.Save(user).Error
 }
 
-// UpdatePassword 更新密码
-func (r *UserRepository) UpdatePassword(id uint, hashedPassword string) error {
-	return r.DB.Model(&model.User{}).Where("id = ?", id).Update("password", hashedPassword).Error
+// UpdatePasswordAndRevokeTokens 更新密码并递增 TokenVersion。
+// 安全：JWT 无状态，改密本身不会让已签发的 Token 失效。递增版本号后，
+// 认证中间件的版本比对会立即拒绝所有历史 Token。
+// 两个字段必须在同一条 UPDATE 中完成，避免出现"密码已改但旧 Token 仍可用"的窗口。
+func (r *UserRepository) UpdatePasswordAndRevokeTokens(id uint, hashedPassword string) error {
+	return r.DB.Model(&model.User{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"password":      hashedPassword,
+			"token_version": gorm.Expr("token_version + 1"),
+		}).Error
+}
+
+// GetTokenVersion 读取指定用户当前的令牌版本号
+func (r *UserRepository) GetTokenVersion(id uint) (int, error) {
+	var user model.User
+	err := r.DB.Select("id", "token_version").First(&user, id).Error
+	if err != nil {
+		return 0, err
+	}
+	return user.TokenVersion, nil
 }
 
 // Delete 删除用户

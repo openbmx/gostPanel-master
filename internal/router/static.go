@@ -28,8 +28,9 @@ func (r *Router) setupStatic(engine *gin.Engine) {
 	engine.NoRoute(func(c *gin.Context) {
 		pathStr := c.Request.URL.Path
 
-		// 跳过 API 路由
+		// API 路由未匹配：明确返回 404 JSON，而不是把请求交给 SPA 兜底
 		if strings.HasPrefix(pathStr, "/api") {
+			c.JSON(http.StatusNotFound, gin.H{"code": 40400, "message": "资源不存在"})
 			return
 		}
 
@@ -39,7 +40,9 @@ func (r *Router) setupStatic(engine *gin.Engine) {
 			fileItem = "index.html"
 		}
 
-		// 尝试从嵌入文件系统中读取文件
+		// 尝试从嵌入文件系统中读取文件。
+		// 安全：staticFS 由 fs.Sub(embed.FS) 得到，其 Open 会用 fs.ValidPath 校验路径，
+		// 任何包含 ".." 的请求（含 URL 编码形式）都会被拒绝，不存在目录穿越。
 		data, err := fs.ReadFile(staticFS, fileItem)
 		if err != nil {
 			// 如果没找到文件，判断是否为前端页面路径（无后缀）
@@ -52,9 +55,10 @@ func (r *Router) setupStatic(engine *gin.Engine) {
 				}
 			}
 
-			// 对于带后缀的资源文件，如果找不到，显式返回 404
+			// 带后缀的资源文件找不到时，显式返回 404。
+			// 此前这里直接 return，Gin 会回一个 200 空响应，容易掩盖前端构建缺失。
 			logger.Warnf("静态资源未找到: %s", fileItem)
-			// 这里不写 c.Status(404)，让它走默认逻辑或返回
+			c.Status(http.StatusNotFound)
 			return
 		}
 

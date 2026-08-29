@@ -29,6 +29,7 @@ func (OperationLog) TableName() string {
 // 操作类型常量
 const (
 	ActionLogin          = "login"           // 登录
+	ActionLoginFailed    = "login_failed"    // 登录失败（安全审计）
 	ActionLogout         = "logout"          // 登出
 	ActionChangePassword = "change_password" // 修改密码
 	ActionCreate         = "create"          // 创建
@@ -36,6 +37,7 @@ const (
 	ActionDelete         = "delete"          // 删除
 	ActionStart          = "start"           // 启动
 	ActionStop           = "stop"            // 停止
+	ActionViewSecret     = "view_secret"     // 查看凭据（安全审计）
 )
 
 // 资源类型常量
@@ -43,4 +45,5 @@ const (
 	ResourceTypeNode   = "node"   // 节点
 	ResourceTypeRule   = "rule"   // 规则
 	ResourceTypeTunnel = "tunnel" // 隧道
+	ResourceTypeAuth   = "auth"   // 认证
 )

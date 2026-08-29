@@ -8,8 +8,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// 全局日志实例
-var log *zap.SugaredLogger
+// 全局日志实例。
+// 预置一个 no-op 实例：Init 之前调用任何 logger 方法都会命中它，
+// 而不是对 nil 指针解引用直接 panic（测试与早期初始化路径都会走到这里）。
+var log = zap.NewNop().Sugar()
 
 // Config 日志配置
 type Config struct {

@@ -40,6 +40,12 @@ type SystemConfig struct {
 	TurnstileEnabled   bool   `gorm:"default:false" json:"turnstile_enabled"`
 	TurnstileSiteKey   string `gorm:"size:255" json:"turnstile_site_key"`
 	TurnstileSecretKey string `gorm:"size:255" json:"turnstile_secret_key"`
+
+	// ObserverToken 节点流量上报令牌。
+	// 安全：/api/v1/observer/report 无法使用管理员 JWT（调用方是各节点上的 GOST 进程），
+	// 因此用一个独立的高熵令牌鉴权。面板在给节点下发观察器配置时会把它写进回调 URL。
+	// 首次使用时自动生成，不会下发给前端。
+	ObserverToken string `gorm:"size:128" json:"-"`
 }
 
 // TableName 指定表名

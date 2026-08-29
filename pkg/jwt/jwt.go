@@ -11,6 +11,10 @@ import (
 type Claims struct {
 	UserID   uint   `json:"user_id"`
 	Username string `json:"username"`
+	// TokenVersion 签发时用户的令牌版本号。
+	// 安全：认证中间件会与数据库中的当前值比对，不一致则拒绝 —— 这是改密后
+	// 立即吊销所有历史 Token 的依据。
+	TokenVersion int `json:"tv"`
 	jwt.RegisteredClaims
 }
 
@@ -39,13 +43,14 @@ func New(cfg *Config) *JWT {
 }
 
 // GenerateToken 生成 Token
-func (j *JWT) GenerateToken(userID uint, username string) (string, error) {
+func (j *JWT) GenerateToken(userID uint, username string, tokenVersion int) (string, error) {
 	now := time.Now()
 	expireAt := now.Add(time.Duration(j.config.Expire) * time.Second)
 
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
+		UserID:       userID,
+		Username:     username,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireAt),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -95,6 +100,8 @@ func (j *JWT) ParseToken(tokenString string) (*Claims, error) {
 }
 
 // RefreshToken 刷新 Token
+// 注意：调用方必须已经通过认证中间件校验过 TokenVersion，
+// 否则被吊销的 Token 可以借由刷新接口无限续期。
 func (j *JWT) RefreshToken(tokenString string) (string, error) {
 	claims, err := j.ParseToken(tokenString)
 	if err != nil {
@@ -102,5 +109,5 @@ func (j *JWT) RefreshToken(tokenString string) (string, error) {
 	}
 
 	// 生成新 Token
-	return j.GenerateToken(claims.UserID, claims.Username)
+	return j.GenerateToken(claims.UserID, claims.Username, claims.TokenVersion)
 }

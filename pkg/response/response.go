@@ -1,9 +1,11 @@
 package response
 
 import (
+	stderrors "errors"
+	"net/http"
+
 	"gost-panel/internal/errors"
 	"gost-panel/pkg/logger"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -131,8 +133,9 @@ func HandleError(c *gin.Context, err error) {
 		return
 	}
 
-	// 判断是否为业务错误
-	if bizErr, ok := err.(*errors.BizError); ok {
+	// 业务错误是开发者显式定义的、面向用户的文案，可以安全下发
+	var bizErr *errors.BizError
+	if stderrors.As(err, &bizErr) {
 		c.JSON(bizErr.HTTPCode, Response{
 			Code:    bizErr.Code,
 			Message: bizErr.Message,
@@ -141,12 +144,14 @@ func HandleError(c *gin.Context, err error) {
 		return
 	}
 
-	// 未知错误，记录日志并返回通用错误
-	logger.Errorf("未知错误: %v", err)
-	// 将实际错误信息返回给前端，而不是 generic message
+	// 安全：未知错误只写日志，绝不回显给客户端。
+	// err.Error() 常包含数据库文件路径、SQL 片段、内部结构名等信息，
+	// 其中部分接口（如 /system/public-config）无需认证即可触发。
+	logger.Errorf("未处理的内部错误: path=%s method=%s err=%v",
+		c.Request.URL.Path, c.Request.Method, err)
 	c.JSON(http.StatusInternalServerError, Response{
 		Code:    CodeInternalError,
-		Message: err.Error(),
+		Message: MsgInternalError,
 		Data:    nil,
 	})
 }

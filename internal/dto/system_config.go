@@ -41,6 +41,8 @@ type PanelSettingResp struct {
 type LoginProtectResp struct {
 	TurnstileEnabled bool   `json:"turnstileEnabled"`
 	TurnstileSiteKey string `json:"turnstileSiteKey"`
+	// TurnstileSecretKey 只返回占位符，表示"已设置"；绝不回显真实密钥
+	TurnstileSecretKey string `json:"turnstileSecretKey"`
 }
 
 type LogConfigResp struct {

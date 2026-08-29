@@ -45,11 +45,17 @@ func (s *NodeService) Create(req *dto.CreateNodeReq, userID uint, username strin
 		return nil, errors.ErrNodeNameExists
 	}
 
+	scheme := req.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+
 	// 创建节点
 	node := &model.GostNode{
 		Name:     req.Name,
 		Address:  req.Address,
 		Port:     req.Port,
+		Scheme:   scheme,
 		Username: req.Username,
 		Password: req.Password,
 		Remark:   req.Remark,
@@ -100,9 +106,18 @@ func (s *NodeService) Update(id uint, req *dto.UpdateNodeReq, userID uint, usern
 	node.Name = req.Name
 	node.Address = req.Address
 	node.Port = req.Port
-	node.Username = req.Username
-	node.Password = req.Password
 	node.Remark = req.Remark
+	if req.Scheme != "" {
+		node.Scheme = req.Scheme
+	}
+	if req.Username != "" {
+		node.Username = req.Username
+	}
+	// 安全：密码不再随节点数据下发，前端无法回填。
+	// 留空一律视为"不修改"，否则编辑备注这类操作会把节点凭据清空。
+	if req.Password != "" {
+		node.Password = req.Password
+	}
 
 	if err = s.nodeRepo.Update(node); err != nil {
 		return nil, err
@@ -180,6 +195,40 @@ func (s *NodeService) GetByID(id uint) (*model.GostNode, error) {
 	return node, nil
 }
 
+// GetCredentials 获取节点的 API 凭据，用于生成安装命令。
+//
+// 安全：这是唯一会返回节点密码的接口。密码等同于目标主机 GOST 守护进程的
+// 完全控制权，因此这里刻意做成一次显式的、单节点的、留痕的操作 ——
+// 而不是像此前那样，随 GET /nodes 把所有节点的密码一起下发。
+func (s *NodeService) GetCredentials(id uint, userID uint, username, ip, userAgent string) (*dto.NodeCredentialsResp, error) {
+	node, err := s.nodeRepo.FindByID(id)
+	if err != nil {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.ErrNodeNotFound
+		}
+		return nil, err
+	}
+
+	s.logService.Record(
+		userID,
+		username,
+		model.ActionViewSecret,
+		model.ResourceTypeNode,
+		node.ID,
+		fmt.Sprintf("查看节点凭据: %s", node.Name),
+		ip,
+		userAgent)
+	logger.Warnf("节点凭据被查看: node=%s(%d) by=%s ip=%s", node.Name, node.ID, username, ip)
+
+	return &dto.NodeCredentialsResp{
+		ID:       node.ID,
+		Name:     node.Name,
+		Port:     node.Port,
+		Username: node.Username,
+		Password: node.Password,
+	}, nil
+}
+
 // List 获取节点列表
 func (s *NodeService) List(req *dto.NodeListReq) ([]model.GostNode, int64, error) {
 	// 设置默认值
@@ -200,9 +249,11 @@ func (s *NodeService) List(req *dto.NodeListReq) ([]model.GostNode, int64, error
 
 	// 关键词搜索
 	if req.Keyword != "" {
-		opt.Conditions["name LIKE ? OR address LIKE ?"] = []interface{}{
-			"%" + req.Keyword + "%",
-			"%" + req.Keyword + "%",
+		// 转义 LIKE 通配符，避免用户输入的 % / _ 变成任意匹配
+		kw := utils.EscapeLike(req.Keyword)
+		opt.Conditions["name LIKE ? ESCAPE '\\' OR address LIKE ? ESCAPE '\\'"] = []interface{}{
+			"%" + kw + "%",
+			"%" + kw + "%",
 		}
 	}
 

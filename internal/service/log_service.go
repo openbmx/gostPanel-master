@@ -5,6 +5,7 @@ import (
 	"gost-panel/internal/dto"
 	"gost-panel/internal/model"
 	"gost-panel/internal/repository"
+	"gost-panel/internal/utils"
 	"gost-panel/pkg/logger"
 
 	"gorm.io/gorm"
@@ -43,7 +44,7 @@ func (s *LogService) List(req *dto.LogListReq) ([]model.OperationLog, int64, err
 		opt.Conditions["resource_type = ?"] = req.ResourceType
 	}
 	if req.Username != "" {
-		opt.Conditions["username LIKE ?"] = "%" + req.Username + "%"
+		opt.Conditions["username LIKE ? ESCAPE '\\'"] = "%" + utils.EscapeLike(req.Username) + "%"
 	}
 
 	return s.logRepo.List(opt)

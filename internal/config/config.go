@@ -19,6 +19,10 @@ var Version = "dev"
 // 一旦泄露，任何人都能伪造管理员 Token，因此检测到它时会强制替换为随机密钥。
 const weakDefaultJWTSecret = "zxcvbnm123456"
 
+// weakDefaultAdminPassword 历史版本中随镜像/发布包一起分发的出厂口令。
+// 检测到它时会替换为随机初始口令，避免公开默认凭据流入生产环境。
+const weakDefaultAdminPassword = "admin123"
+
 // Config 应用配置结构
 type Config struct {
 	Server   ServerConfig   `mapstructure:"server"`
@@ -32,6 +36,27 @@ type Config struct {
 type ServerConfig struct {
 	Port string `mapstructure:"port"`
 	Mode string `mapstructure:"mode"`
+
+	// TrustedProxies 受信任的反向代理 CIDR 列表。
+	// 安全：留空表示不信任任何代理，此时 ClientIP() 只取 TCP 连接的真实对端地址，
+	// X-Forwarded-For / X-Real-IP 一律忽略。这是防止限流绕过与审计日志伪造的关键。
+	// 仅当面板确实部署在 Nginx/Caddy/CDN 之后时，才填写这些代理的 CIDR。
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+
+	// CORSOrigins 额外允许跨域访问 API 的来源，形如 https://panel.example.com。
+	// 安全：默认留空 = 不允许任何跨域访问。面板前端与 API 同源，正常部署无需配置；
+	// 仅在前端被单独部署到其他域名时才需要填写。切勿填 "*"。
+	CORSOrigins []string `mapstructure:"cors_origins"`
+
+	// TLS HTTPS 配置
+	TLS TLSConfig `mapstructure:"tls"`
+}
+
+// TLSConfig HTTPS 配置
+type TLSConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	CertFile string `mapstructure:"cert_file"`
+	KeyFile  string `mapstructure:"key_file"`
 }
 
 // DatabaseConfig 数据库配置
@@ -57,6 +82,12 @@ type LogConfig struct {
 type AdminConfig struct {
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
+
+	// ForceReset 应急口令重置开关（GOSTPANEL_ADMIN_FORCE_RESET=true）。
+	// 安全：默认 false。管理员账号一旦创建，其密码由数据库唯一持有，
+	// 配置文件中的 password 只用于首次初始化，绝不会在重启时覆盖用户改过的密码。
+	// 仅在管理员遗忘口令时，临时设置此开关启动一次以强制重置，随后必须移除。
+	ForceReset bool `mapstructure:"force_reset"`
 }
 
 // 全局配置实例
@@ -74,11 +105,12 @@ func Load(configPath string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	for _, key := range []string{
-		"server.port", "server.mode",
+		"server.port", "server.mode", "server.trusted_proxies", "server.cors_origins",
+		"server.tls.enabled", "server.tls.cert_file", "server.tls.key_file",
 		"database.type", "database.path",
 		"jwt.secret", "jwt.expire",
 		"log.level", "log.format", "log.output",
-		"admin.username", "admin.password",
+		"admin.username", "admin.password", "admin.force_reset",
 	} {
 		_ = v.BindEnv(key)
 	}
@@ -169,14 +201,32 @@ func setDefaults(cfg *Config) {
 	}
 
 	// 管理员默认配置
+	// 安全：这里的密码只在数据库中尚不存在该管理员时用于首次创建。
+	// 若未显式配置，生成一次性随机初始口令并打印，避免出厂弱口令 admin123 流入生产。
 	if cfg.Admin.Username == "" {
 		cfg.Admin.Username = "admin"
 	}
-	if cfg.Admin.Password == "" {
-		cfg.Admin.Password = "admin123"
+	if cfg.Admin.Password == "" || cfg.Admin.Password == weakDefaultAdminPassword {
+		if pwd, err := randomSecret(12); err == nil {
+			cfg.Admin.Password = pwd
+			fmt.Fprintln(os.Stderr, "[安全提示] 未配置 admin.password（或仍为弱默认值），已生成随机初始密码：")
+			fmt.Fprintf(os.Stderr, "          %s\n", pwd)
+			fmt.Fprintln(os.Stderr, "          该密码仅在首次创建管理员账号时生效；若账号已存在则不会有任何变化。")
+			fmt.Fprintln(os.Stderr, "          请立即登录并修改密码，随后可忽略此提示。")
+		} else {
+			cfg.Admin.Password = weakDefaultAdminPassword
+			fmt.Fprintln(os.Stderr, "[安全警告] 生成随机初始密码失败，回退到弱默认口令 admin123，请务必登录后立即修改！")
+		}
 	}
-	if cfg.Admin.Password == "admin123" {
-		fmt.Fprintln(os.Stderr, "[安全警告] 正在使用默认管理员密码 admin123，存在被暴力破解风险，请登录后立即修改或通过配置 / 环境变量设置强密码。")
+
+	// TLS 配置校验：显式开启但未提供证书时直接失败，避免"以为开了 HTTPS 实际是明文"。
+	if cfg.Server.TLS.Enabled && (cfg.Server.TLS.CertFile == "" || cfg.Server.TLS.KeyFile == "") {
+		fmt.Fprintln(os.Stderr, "[安全警告] server.tls.enabled=true 但未提供 cert_file/key_file，TLS 未生效，仍以明文 HTTP 监听！")
+		cfg.Server.TLS.Enabled = false
+	}
+	if !cfg.Server.TLS.Enabled {
+		fmt.Fprintln(os.Stderr, "[安全提示] 面板正以明文 HTTP 监听。登录口令与 Token 会以明文传输，")
+		fmt.Fprintln(os.Stderr, "          请配置 server.tls 或在前面放置 HTTPS 反向代理后再暴露到公网。")
 	}
 }
 

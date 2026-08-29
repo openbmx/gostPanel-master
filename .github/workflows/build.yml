@@ -7,6 +7,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  scripts:
+    name: Shell Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Syntax check
+      run: |
+        for f in scripts/*.sh scripts/tests/*.sh; do
+          bash -n "$f" && echo "OK $f"
+        done
+
+    # 升级脚本的布局迁移在临时目录里演练一遍：
+    # 这段逻辑只在存量用户升级时才会跑到，出问题的代价很高，
+    # 但它本身不依赖 root/systemd/网络，完全可以在 CI 中验证。
+    - name: Upgrade migration dry-run
+      run: bash scripts/tests/upgrade-migration-test.sh
+
   test:
     name: Test and Lint
     runs-on: ubuntu-latest
@@ -33,16 +53,18 @@ jobs:
     - name: Unit tests
       run: go test -count=1 ./...
 
+    # 版本需与 .golangci.yml 的 `version: "2"` 配置格式匹配：
+    # golangci-lint v1.x 无法解析 v2 配置。这里固定为本地验证过的版本。
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v9
       with:
-        version: v1.64
+        version: v2.12.2
         args: --timeout=10m
 
   build:
     name: Build Binaries
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, scripts]
 
     steps:
     - name: Checkout code

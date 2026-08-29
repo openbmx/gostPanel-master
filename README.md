@@ -278,15 +278,36 @@ make release VERSION=v1.0.0
 
 ### 持续集成 / 发布
 
-- `.github/workflows/build.yml`：推送到 `main` 时自动编译并上传构建产物（artifact）。
-- `.github/workflows/release.yml`：推送 `v*` tag 时自动编译多平台二进制并发布到 GitHub Releases。
-- `.github/workflows/docker.yml`：推送 `v*` tag 时自动构建并推送多架构镜像到 GHCR。
+| 工作流 | 触发 | 内容 |
+| :--- | :--- | :--- |
+| `build.yml` | push / PR | shell 语法检查、升级迁移演练、`go vet`、单元测试、golangci-lint，通过后编译产物 |
+| `security-scan.yml` | push / PR / 每周一 | `govulncheck` 与 `npm audit`，高危漏洞须升级或登记带到期日的例外 |
+| `release.yml` | 推送 `v*` tag | GoReleaser：多平台二进制 + `checksums.txt` + 多架构 GHCR 镜像 + Release |
 
-发布新版本只需打 tag：
+**发布新版本**：
+
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag -a v1.1.0 -m "v1.1.0" -m "修复了 xxx；新增了 yyy"
+git push origin v1.1.0
 ```
+
+tag 的**附注消息即 Release 正文**，也是面板「版本与更新」页展示给用户的更新日志，请写清楚改了什么。用 `git tag -a`（附注 tag），轻量 tag 没有消息体。
+
+发布产物由 [GoReleaser](.goreleaser.yaml) 统一产出：
+
+- `gost-panel-{linux,darwin}-{amd64,arm64}.tar.gz`、`gost-panel-windows-amd64.zip`
+- `checksums.txt`（SHA256，升级脚本与面板内更新均强制校验）
+- GHCR 多架构镜像，标签 `:1.1.0` / `:1.1` / `:1` / `:latest`
+
+> 产物命名刻意保留了 `name-os-arch` 形式（GoReleaser 默认是 `name_version_os_arch`）。
+> 存量用户机器上的旧脚本按这个名字拼接下载地址，改名会让他们的升级直接 404。
+>
+> 改动 `.goreleaser.yaml` 后请先本地演练确认产物形态未变：
+> ```bash
+> make release-snapshot
+> ```
+
+失败的发布可在 Actions 页面用 **workflow_dispatch** 指定同一个 tag 重跑。
 
 ### 配置文件
 默认配置文件位于 `config/config.yaml`。您可以在此修改端口、数据库设置和日志级别，也可使用上文的环境变量覆盖。

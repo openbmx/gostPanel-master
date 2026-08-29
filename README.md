@@ -142,7 +142,30 @@ bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main
 bash <(curl -sSL https://raw.githubusercontent.com/openbmx/gostPanel-master/main/scripts/install_node.sh) uninstall
 ```
 
-## ⬆️ 在线升级
+## ⬆️ 升级
+
+### 方式一：面板内在线更新（推荐）
+
+进入 **系统管理 → 版本与更新**，可以直接查看当前版本、最新版本与更新日志，一键完成升级或回滚。
+
+流程：从 GitHub Releases 下载对应平台的产物 → **强制校验 SHA256** → 只提取二进制（不会碰你的配置文件）→ 原子替换并保留上一版本备份 → 提示重启生效。
+
+- 校验和缺失或不匹配时**一律中止**，不会安装未经验证的二进制
+- 支持「回滚上一版本」与「回滚到指定历史版本」
+- 升级、回滚、重启均记入操作日志
+
+下列情况会自动拒绝并说明原因：
+
+| 情况 | 原因与正确做法 |
+| :--- | :--- |
+| Docker 部署 | 容器重建会让更新失效，请用 `docker compose pull && docker compose up -d` |
+| 非发布构建（版本号为 `dev`） | 本地 `make build` 的产物无法与发布版本比较，请用 Releases 或安装脚本部署 |
+| 程序目录不可写 | 旧版本装在 `/usr/local/bin`，执行一次升级脚本即可自动迁移到 `/opt/gost-panel` |
+
+> 国内网络可在 `config.yaml` 中配置 `update.mirror_prefix` 加速下载。
+> 校验和始终直连 GitHub 获取，因此即便镜像不可信也无法投毒。
+
+### 方式二：升级脚本
 
 升级脚本**只替换二进制，完整保留配置文件与数据库**，并在升级前自动备份、升级后健康检查，若失败会自动回滚到旧版本，不影响现有功能与数据。
 
@@ -165,9 +188,17 @@ GOST_VERSION=3.2.6 \
 ```
 
 > 升级机制说明：
+> - 升级脚本会**校验 SHA256**（校验和直连 GitHub 获取，不经过 `GH_PROXY`，因此镜像不可信也无法投毒）；校验失败即中止。
 > - 旧二进制备份为 `*.bak.<时间戳>`，数据库/配置同样自动备份；确认无误后可手动删除。
 > - 服务端健康检查通过 `http://127.0.0.1:<端口>/api/v1/health`；节点检查服务存活与 API 端口监听。
 > - Docker 部署的升级方式：`docker compose pull && docker compose up -d`（数据通过卷持久化，不会丢失）。
+>
+> **布局变更**：为支持面板内在线更新，二进制已从 `/usr/local/bin/gost-panel` 迁移到 `/opt/gost-panel/gost-panel`
+> （在线更新需要用 rename 替换二进制，进程必须能写入程序所在目录）。升级脚本会自动完成迁移并更新 systemd 单元，无需手工干预。
+>
+> 该布局意味着面板进程可写自己的二进制——这是 in-app 自更新的固有代价：面板一旦被攻破，攻击者可借此持久化。
+> 因此只放开了 `/opt/gost-panel` 这一个目录，且更新流程强制校验 SHA256、只接受来自 GitHub 官方域名的产物。
+> 若不需要该功能，可在配置中设置 `update.enabled: false`。
 
 ## 🔐 环境变量配置
 

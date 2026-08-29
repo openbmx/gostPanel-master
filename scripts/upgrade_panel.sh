@@ -20,10 +20,14 @@ PLAIN='\033[0m'
 REPO="${REPO:-openbmx/gostPanel-master}"   # GitHub 仓库 owner/name
 VERSION="${VERSION:-latest}"               # latest 或具体 tag，如 v1.0.0
 GH_PROXY="${GH_PROXY:-}"                    # 可选 GitHub 加速前缀，如 https://ghfast.top/
-INSTALL_PATH="/usr/local/bin"
+# 二进制现在装在服务账号可写的独立目录，以支持面板内在线更新
+INSTALL_PATH="/opt/gost-panel"
+LEGACY_BIN="/usr/local/bin/gost-panel"     # 旧版本的安装位置
 CONFIG_PATH="/etc/gost-panel"
 DATA_PATH="/var/lib/gost-panel"
+LOG_PATH="/var/log/gost-panel"
 SERVICE_NAME="gost-panel"
+SERVICE_USER="gost-panel"
 BIN_FILE="${INSTALL_PATH}/gost-panel"
 CONFIG_FILE="${CONFIG_PATH}/config.yaml"
 HEALTH_TIMEOUT=30                          # 健康检查超时秒数
@@ -55,8 +59,46 @@ check_root() {
     fi
 }
 
+# 把旧版本安装（/usr/local/bin）迁移到新布局（/opt/gost-panel）。
+# 新布局是面板内在线更新的前提：二进制必须位于服务账号可写的目录。
+migrate_layout() {
+    if [ -f "$BIN_FILE" ]; then
+        return 0
+    fi
+    if [ ! -f "$LEGACY_BIN" ]; then
+        return 0
+    fi
+
+    info "检测到旧版安装布局，正在迁移二进制到 ${INSTALL_PATH}..."
+    mkdir -p "$INSTALL_PATH"
+    mv "$LEGACY_BIN" "$BIN_FILE"
+    chmod +x "$BIN_FILE"
+
+    # systemd 单元里的 ExecStart 与 ReadWritePaths 都要跟着改
+    local unit="/etc/systemd/system/${SERVICE_NAME}.service"
+    if [ -f "$unit" ]; then
+        sed -i "s#^ExecStart=.*/gost-panel#ExecStart=${BIN_FILE}#" "$unit"
+        if grep -q '^ReadWritePaths=' "$unit"; then
+            # 已有该行则追加程序目录（幂等：已包含就不重复加）
+            grep -q "ReadWritePaths=.*${INSTALL_PATH}" "$unit" \
+                || sed -i "s#^ReadWritePaths=.*#& ${INSTALL_PATH}#" "$unit"
+        fi
+        systemctl daemon-reload
+    fi
+
+    # 目录归服务账号，否则面板内更新仍然无法替换二进制
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_PATH" 2>/dev/null || true
+        chmod 750 "$INSTALL_PATH" 2>/dev/null || true
+    fi
+
+    ok "已迁移到 ${BIN_FILE}"
+}
+
 # 前置检查：确认已安装
 check_installed() {
+    migrate_layout
+
     if [ ! -f "$BIN_FILE" ]; then
         err "未检测到已安装的 Gost Panel ($BIN_FILE)，请先使用 install_panel.sh 安装。"
         exit 1
@@ -77,6 +119,65 @@ get_arch() {
         aarch64|arm64) echo "arm64" ;;
         *) err "不支持的架构: $arch"; exit 1 ;;
     esac
+}
+
+# 校验下载产物的 SHA256。
+#
+# 安全：校验和文件始终直连 GitHub 获取，不经过 GH_PROXY。
+# 若两者都走同一个加速镜像，镜像方可以同时替换二进制与其校验和，
+# 校验就完全失去意义 —— 这正是很多"支持加速"的升级脚本的实际漏洞。
+verify_checksum() {
+    local file="$1" name="$2" url expected actual
+
+    if [ "$VERSION" = "latest" ]; then
+        url="https://github.com/${REPO}/releases/latest/download/checksums.txt"
+    else
+        url="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+    fi
+
+    if [ "${SKIP_CHECKSUM:-0}" = "1" ]; then
+        warn "SKIP_CHECKSUM=1，已跳过完整性校验（不推荐）"
+        return 0
+    fi
+
+    info "校验文件完整性..."
+    local fetched=0
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "${TMP_DIR}/checksums.txt" "$url" 2>/dev/null && fetched=1
+    fi
+    if [ "$fetched" -eq 0 ] && command -v wget >/dev/null 2>&1; then
+        wget -qO "${TMP_DIR}/checksums.txt" "$url" 2>/dev/null && fetched=1
+    fi
+
+    if [ "$fetched" -eq 0 ] || [ ! -s "${TMP_DIR}/checksums.txt" ]; then
+        err "无法获取 checksums.txt，已中止升级。"
+        err "若目标版本发布于该功能上线之前，请升级到更新的版本；"
+        err "确需跳过校验时可设置 SKIP_CHECKSUM=1（不推荐，等同于放弃完整性保证）。"
+        exit 1
+    fi
+
+    expected=$(grep -E "[ *]${name}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}' | head -n1)
+    if [ -z "$expected" ]; then
+        err "checksums.txt 中没有 ${name} 的条目，已中止升级"
+        exit 1
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$file" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        err "缺少 sha256sum/shasum，无法校验完整性，已中止升级"
+        exit 1
+    fi
+
+    if [ "$expected" != "$actual" ]; then
+        err "校验失败！文件可能已损坏或被篡改，已中止升级"
+        err "  期望: $expected"
+        err "  实际: $actual"
+        exit 1
+    fi
+    ok "校验通过"
 }
 
 # 下载新版二进制到临时目录
@@ -106,6 +207,8 @@ download_binary() {
         err "下载失败，请检查网络或设置 GH_PROXY 加速"
         exit 1
     fi
+
+    verify_checksum "${TMP_DIR}/${asset}" "$asset"
 
     tar -zxf "${TMP_DIR}/${asset}" -C "${TMP_DIR}"
     if [ ! -f "${TMP_DIR}/gost-panel-linux-${arch}" ]; then

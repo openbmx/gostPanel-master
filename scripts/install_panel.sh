@@ -18,7 +18,10 @@ PLAIN='\033[0m'
 REPO="${REPO:-openbmx/gostPanel-master}"   # GitHub 仓库 owner/name
 VERSION="${VERSION:-latest}"               # latest 或具体 tag，如 v1.0.0
 GH_PROXY="${GH_PROXY:-}"                    # 可选 GitHub 加速前缀，如 https://ghfast.top/
-INSTALL_PATH="/usr/local/bin"
+# 二进制放在服务账号可写的独立目录，而不是 /usr/local/bin。
+# 这是面板内在线更新的前提：更新需要用 rename 替换二进制，
+# 而 rename 作用于目录项 —— 进程必须能写入该目录。
+INSTALL_PATH="/opt/gost-panel"
 CONFIG_PATH="/etc/gost-panel"
 DATA_PATH="/var/lib/gost-panel"
 LOG_PATH="/var/log/gost-panel"
@@ -101,9 +104,18 @@ install_binary() {
         systemctl stop gost-panel
     fi
     
+    mkdir -p ${INSTALL_PATH}
+
+    # 清理历史位置的二进制：旧版本装在 /usr/local/bin，
+    # 留着会让人不清楚到底在跑哪一个
+    if [ -f /usr/local/bin/gost-panel ]; then
+        echo "移除旧位置的二进制 /usr/local/bin/gost-panel"
+        rm -f /usr/local/bin/gost-panel
+    fi
+
     mv /tmp/gost-panel ${INSTALL_PATH}/gost-panel
     chmod +x ${INSTALL_PATH}/gost-panel
-    
+
     echo -e "${GREEN}✅ 安装到 ${INSTALL_PATH}/gost-panel${PLAIN}"
 }
 
@@ -215,6 +227,13 @@ create_service() {
         chmod 750 "${LOG_PATH}" 2>/dev/null || true
         chgrp "${SERVICE_USER}" "${CONFIG_PATH}/config.yaml" 2>/dev/null || true
         chmod 640 "${CONFIG_PATH}/config.yaml" 2>/dev/null || true
+
+        # 程序目录归服务账号，使面板内在线更新能替换自己的二进制。
+        # 安全权衡：这意味着面板被攻破后攻击者可写入二进制实现持久化。
+        # 这是 in-app 自更新的固有代价，因此只放开这一个目录，
+        # 且更新流程强制校验 SHA256、只接受来自 GitHub 的产物。
+        chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_PATH}" 2>/dev/null || true
+        chmod 750 "${INSTALL_PATH}" 2>/dev/null || true
     else
         echo -e "${YELLOW}⚠️  未能创建 ${SERVICE_USER} 账号，服务将以 root 运行（安全性较低）${PLAIN}"
         SERVICE_USER="root"
@@ -242,7 +261,9 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 # 整个文件系统只读，仅显式放行下面的路径
 ProtectSystem=strict
-ReadWritePaths=${DATA_PATH} ${LOG_PATH}
+# INSTALL_PATH 必须可写：面板内在线更新通过 rename 替换二进制，
+# 而 rename 作用于目录项，进程需要对程序所在目录有写权限。
+ReadWritePaths=${DATA_PATH} ${LOG_PATH} ${INSTALL_PATH}
 # 隔离用户家目录、/tmp、内核与控制组接口
 ProtectHome=true
 PrivateTmp=true
@@ -346,7 +367,8 @@ uninstall() {
     
     # 删除文件
     rm -f /etc/systemd/system/gost-panel.service
-    rm -f ${INSTALL_PATH}/gost-panel
+    rm -rf ${INSTALL_PATH}
+    rm -f /usr/local/bin/gost-panel   # 清理旧版本的安装位置
     
     # 询问是否删除数据
     read -p "是否删除配置和数据？[y/N] " -n 1 -r

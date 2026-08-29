@@ -2,7 +2,12 @@ module gost-panel
 
 go 1.23.0
 
-toolchain go1.24.11
+// 构建工具链固定在修复了标准库漏洞的版本。
+// go1.24.11 的 net/url、crypto/tls、net/http、encoding/xml、encoding/asn1
+// 均有已知漏洞（GO-2026-6218 / 6090 / 6089 / 6088 / 5972 / 5856），
+// 全部在 go1.25.13 修复。CI 的 setup-go 按本行解析版本，
+// 升级前请先跑 govulncheck 确认没有新增项。
+toolchain go1.25.13
 
 require (
 	github.com/gin-contrib/cors v1.7.6

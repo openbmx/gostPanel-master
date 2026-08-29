@@ -150,12 +150,26 @@ server:
   port: ":${PORT}"
   mode: "release"
 
+  # 受信任的反向代理 CIDR。留空 = 不信任任何代理，忽略 X-Forwarded-For。
+  # 这是登录限流与审计日志来源 IP 能否可信的前提。
+  # 若在面板前放置了 Nginx/Caddy/CDN，请在此声明其地址，例如 "127.0.0.1/32"。
+  trusted_proxies: []
+
+  # 允许跨域访问 API 的来源。留空 = 不允许跨域（同源部署无需配置）。
+  cors_origins: []
+
+  # HTTPS。公网暴露前强烈建议启用，否则登录口令与 Token 明文传输。
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+
 database:
   type: "sqlite"
   path: "${DATA_PATH}/gost-panel.db"
 
 jwt:
-  secret: "$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)"
+  secret: "$(head -c 48 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   expire: 7200
 
 log:
@@ -163,11 +177,16 @@ log:
   format: "json"
   output: "${LOG_PATH}/app.log"
 
-# 初始管理员账号（首次启动后建议修改密码）
+# 初始管理员账号。
+# 注意：下面的 password 只在「管理员账号尚不存在」时用于首次创建。
+# 你之后在 Web 面板中修改的密码保存在数据库里，重启或升级都不会被这里覆盖。
+# 如果遗忘了密码，把 force_reset 临时改成 true 启动一次即可重置，之后请改回 false。
 admin:
   username: admin
   password: ${ADMIN_PASS}
+  force_reset: false
 EOF
+    chmod 600 ${CONFIG_PATH}/config.yaml
     
     echo -e "${GREEN}✅ 配置文件: ${CONFIG_PATH}/config.yaml${PLAIN}"
     echo -e "${YELLOW}⚠️  管理员密码: ${ADMIN_PASS}${PLAIN}"

@@ -2,12 +2,38 @@ server:
   port: ":39100"
   mode: "release"  # debug, release
 
+  # 受信任的反向代理 CIDR。
+  # 安全：留空 = 不信任任何代理，ClientIP 只取 TCP 对端地址，
+  # 忽略 X-Forwarded-For / X-Real-IP。这是登录限流与审计日志能否可信的前提。
+  # 仅在面板确实部署于 Nginx/Caddy/CDN 之后时才填写，例如：
+  # trusted_proxies:
+  #   - "127.0.0.1/32"
+  #   - "10.0.0.0/8"
+  trusted_proxies: []
+
+  # 允许跨域访问 API 的来源。留空 = 不允许任何跨域（默认，同源部署无需配置）。
+  # 切勿填写 "*"。仅在前端被单独部署到其他域名时使用，例如：
+  # cors_origins:
+  #   - "https://panel.example.com"
+  cors_origins: []
+
+  # HTTPS。强烈建议在公网暴露前启用，否则登录口令与 Token 均为明文传输。
+  # 也可以保持关闭，改由前置的 Nginx/Caddy 终结 TLS（此时需配置 trusted_proxies）。
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+
 database:
   type: "sqlite"
-  path: "./gost-panel.db"
+  # 放在 data/ 下，Docker 部署时该目录已挂载为持久化卷。
+  # 从旧版本升级时，程序会自动把 ./gost-panel.db 迁移到这里。
+  path: "./data/gost-panel.db"
 
 jwt:
-  secret: "zxcvbnm123456"
+  # 留空则每次启动生成随机密钥（已签发的 Token 会在重启后失效）。
+  # 生产环境请填写一个足够长的随机字符串，或用 GOSTPANEL_JWT_SECRET 注入。
+  secret: ""
   expire: 7200  # 2小时 (秒)
 
 log:
@@ -17,4 +43,14 @@ log:
 
 admin:
   username: "admin"
-  password: "admin123"  # 首次启动后建议修改密码
+  # 仅用于「管理员账号尚不存在」时的首次创建。
+  # 留空则首次启动时生成随机密码并打印到标准错误输出（推荐）。
+  #
+  # 重要：账号一旦创建，密码的唯一真相来源就是数据库。
+  # 你在 Web UI 中修改的密码不会被这里的值覆盖，重启/升级都不会还原。
+  password: ""
+
+  # 应急口令重置开关。仅在遗忘管理员密码时临时设为 true 启动一次，
+  # 它会把密码强制重置为上面的 password 并吊销所有已签发的 Token。
+  # 重置完成后务必改回 false，否则每次启动都会重置。
+  force_reset: false

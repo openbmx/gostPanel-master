@@ -9,11 +9,20 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
-      - GIN_MODE=release
       - TZ=Asia/Shanghai
-      # 可选：通过环境变量覆盖配置（生产环境务必设置强随机密钥）
+      # 数据库位于 /app/data，已由上面的 volumes 持久化
+      - GOSTPANEL_DATABASE_PATH=./data/gost-panel.db
+      # 强烈建议设置：否则每次重启都会生成新的随机 JWT 密钥，导致需要重新登录
       # - GOSTPANEL_JWT_SECRET=请填写足够随机的长字符串
-      # - GOSTPANEL_ADMIN_PASSWORD=请修改默认管理员密码
+      #
+      # 初始管理员密码。留空则首次启动时随机生成并打印到容器日志：
+      #   docker compose logs gostpanel | grep 随机初始密码
+      # 该值只在管理员账号尚不存在时生效，不会覆盖你后来在面板中修改的密码。
+      # - GOSTPANEL_ADMIN_PASSWORD=请设置一个强密码
+      #
+      # 若在本容器前面放置了反向代理，需声明其地址，否则限流与审计日志的
+      # 来源 IP 会全部显示为代理地址：
+      # - GOSTPANEL_SERVER_TRUSTED_PROXIES=172.16.0.0/12
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:39100/api/v1/health"]

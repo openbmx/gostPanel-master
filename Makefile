@@ -19,6 +19,7 @@ help:
 	@echo "  make run            - Build web and run server"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make release        - Build multi-platform release"
+	@echo "  make release-snapshot - Dry-run the GoReleaser pipeline locally"
 	@echo ""
 	@echo "💡 Tip for Windows users: Run these commands in Git Bash or WSL for compatibility."
 
@@ -43,7 +44,22 @@ run: build-web
 	@echo "Starting server..."
 	go run cmd/server/main.go
 
-# 构建多平台发布版本
+# 本地演练发布流程（不推送、不建镜像）
+# 用于在改动 .goreleaser.yaml 后确认产物名与包内结构没有变化 ——
+# 这两者被面板内在线更新器与升级脚本依赖，改名会让存量用户升级失败。
+.PHONY: release-snapshot
+release-snapshot: build-web
+	@echo "Running goreleaser snapshot..."
+	GITHUB_REPO_OWNER=openbmx \
+	GITHUB_REPO_OWNER_LOWER=openbmx \
+	GITHUB_REPO_NAME=gostPanel-master \
+	TAG_MESSAGE="local snapshot" \
+	goreleaser release --snapshot --clean --skip=docker,publish
+	@echo ""
+	@echo "产物："
+	@ls -1 dist/*.tar.gz dist/*.zip dist/checksums.txt 2>/dev/null || true
+
+# 构建多平台发布版本（手工方式，正式发布请打 tag 走 CI 的 GoReleaser 流程）
 release: build-web
 	@echo "Building release binaries..."
 	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o gost-panel-linux-amd64 cmd/server/main.go

@@ -214,6 +214,71 @@ func TestExtractBinary_OnlyBinary(t *testing.T) {
 	}
 }
 
+// TestExtractBinary_GoReleaserLayout 锁定 GoReleaser 实际产出的包内布局。
+//
+// 与手工打包时代的差异：二进制在包内叫 gost-panel（不带平台后缀），
+// 且多了 LICENSE / README.md。发布流程一旦改动打包方式，
+// 这条用例会先于线上升级失败暴露出来。
+func TestExtractBinary_GoReleaserLayout(t *testing.T) {
+	dir := t.TempDir()
+	archive := buildTarGz(t, []tarEntry{
+		{name: "LICENSE", content: "MIT"},
+		{name: "README.md", content: "# Gost Panel"},
+		{name: "config/config.yaml", content: "jwt:\n  secret: USER_SECRET\n"},
+		{name: "gost-panel", content: "GORELEASER-BINARY"},
+	})
+	archivePath := writeTempFile(t, dir, "gost-panel-linux-amd64.tar.gz", archive)
+
+	dest := filepath.Join(dir, "out")
+	if err := extractBinary(archivePath, dest); err != nil {
+		t.Fatalf("解包 GoReleaser 产物失败: %v", err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "GORELEASER-BINARY" {
+		t.Errorf("提取到的内容不对: %q", got)
+	}
+	// 同样不能碰用户配置
+	if _, err := os.Stat(filepath.Join(dir, "config")); err == nil {
+		t.Error("config/ 目录被解包了，会覆盖用户配置")
+	}
+}
+
+// TestSelectAssets_MatchesReleaseNaming 锁定发布产物的命名约定。
+//
+// GoReleaser 的默认模板是 name_version_os_arch（下划线），本项目刻意保留了
+// 历史的 name-os-arch 形式：改名会同时打断安装/升级脚本拼接的下载地址
+// 和这里的资产匹配，而旧脚本仍在用户机器上运行。
+func TestSelectAssets_MatchesReleaseNaming(t *testing.T) {
+	assetName := fmt.Sprintf("gost-panel-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		assetName = fmt.Sprintf("gost-panel-%s-%s.zip", runtime.GOOS, runtime.GOARCH)
+	}
+
+	assets := []github.Asset{
+		{Name: "gost-panel-linux-amd64.tar.gz"},
+		{Name: "gost-panel-linux-arm64.tar.gz"},
+		{Name: "gost-panel-darwin-amd64.tar.gz"},
+		{Name: "gost-panel-darwin-arm64.tar.gz"},
+		{Name: "gost-panel-windows-amd64.zip"},
+		{Name: "checksums.txt"},
+	}
+
+	archive, checksum := selectAssets(assets)
+	if archive == nil {
+		t.Fatalf("未能为 %s/%s 匹配到发布产物", runtime.GOOS, runtime.GOARCH)
+	}
+	if archive.Name != assetName {
+		t.Errorf("匹配到 %q，期望 %q", archive.Name, assetName)
+	}
+	if checksum == nil || checksum.Name != "checksums.txt" {
+		t.Error("未能匹配到 checksums.txt")
+	}
+}
+
 func TestExtractBinary_RejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	archive := buildTarGz(t, []tarEntry{

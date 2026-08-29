@@ -1,19 +1,31 @@
-name: Build and Release
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  # 允许对已存在的 tag 手动重跑发布（例如上一次因网络失败）
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（如 v1.1.0）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
-  build:
+  # 前端必须先构建：产物会被 embed 进 Go 二进制，
+  # 而 GoReleaser 只负责编译 Go，不会去跑 npm。
+  build-frontend:
+    name: Build Frontend
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -22,45 +34,102 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: internal/router/dist/
+          retention-days: 1
+
+  release:
+    name: Build and Publish
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser 需要完整历史来解析 tag
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: internal/router/dist/
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
+          cache: true
 
-      - name: Build and Release
-        run: |
-          make release VERSION=${{ github.ref_name }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Package binaries
-        run: |
-          # 打包 Linux amd64
-          tar -czvf gost-panel-linux-amd64.tar.gz gost-panel-linux-amd64 config/config.yaml
-          # 打包 Linux arm64
-          tar -czvf gost-panel-linux-arm64.tar.gz gost-panel-linux-arm64 config/config.yaml
-          # 打包 macOS amd64
-          tar -czvf gost-panel-darwin-amd64.tar.gz gost-panel-darwin-amd64 config/config.yaml
-          # 打包 macOS arm64
-          tar -czvf gost-panel-darwin-arm64.tar.gz gost-panel-darwin-arm64 config/config.yaml
-          # 打包 Windows
-          zip gost-panel-windows-amd64.zip gost-panel-windows-amd64.exe config/config.yaml
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # 生成校验和。这是面板内自更新与升级脚本校验完整性的唯一依据：
-      # 没有它，更新流程就退化成"下载什么就执行什么"。
-      # 格式与 sha256sum 默认输出一致（"<hash>  <filename>"），便于 sha256sum -c 直接使用。
-      - name: Generate checksums
-        run: |
-          sha256sum gost-panel-*.tar.gz gost-panel-*.zip > checksums.txt
-          cat checksums.txt
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          files: |
-            *.tar.gz
-            *.zip
-            checksums.txt
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # release 正文取自 tag 的附注消息，面板「版本与更新」页会原样展示它。
+      # 打 tag 请用 -a/-m 写清改动：git tag -a v1.1.0 -m "标题" -m "详细说明"
+      - name: Extract tag message
+        id: tag_message
+        run: |
+          git fetch --tags --force
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.tag }}"
+          else
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "发布 tag: $TAG_NAME"
+
+          MESSAGE=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
+          if [ -z "$MESSAGE" ]; then
+            # 轻量 tag 没有附注消息，退回标题行；仍为空则给一句兜底文案，
+            # 避免面板的更新日志区域一片空白
+            MESSAGE=$(git tag -l --format='%(contents:subject)' "$TAG_NAME")
+          fi
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="本次发布未提供更新说明。"
+          fi
+
+          {
+            echo "message<<GOSTPANEL_EOF"
+            echo "$MESSAGE"
+            echo "GOSTPANEL_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set lowercase owner for GHCR
+        id: lowercase
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # 固定版本而非 `~> v2`：.goreleaser.yaml 是对着这个版本本地实跑验证过的
+      # （产物命名、包内布局、checksums 格式都被面板内更新器和升级脚本依赖）。
+      # 浮动版本意味着某次 goreleaser 更新就可能悄悄改掉产物形态。
+      # 升级此处版本号时，请先在本地跑一次：
+      #   goreleaser release --snapshot --clean --skip=docker,publish
+      # 并确认 dist/ 下的文件名与包内结构未变。
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.0
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
+          GITHUB_REPO_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO_OWNER_LOWER: ${{ steps.lowercase.outputs.owner }}
+          GITHUB_REPO_NAME: ${{ github.event.repository.name }}

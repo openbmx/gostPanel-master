@@ -81,14 +81,23 @@ download_binary() {
         exit 1
     fi
 
-    # 解压并提取二进制
+    # 解压并提取二进制。
+    # 兼容两种包内布局：GoReleaser 打包的叫 gost-panel，
+    # 而本功能上线前手工打包的版本叫 gost-panel-linux-<arch>。
     tar -zxf "${tmp_dir}/${asset}" -C "${tmp_dir}"
-    if [ ! -f "${tmp_dir}/gost-panel-linux-${arch}" ]; then
+    extracted=""
+    for candidate in "${tmp_dir}/gost-panel" "${tmp_dir}/gost-panel-linux-${arch}"; do
+        if [ -f "$candidate" ]; then
+            extracted="$candidate"
+            break
+        fi
+    done
+    if [ -z "$extracted" ]; then
         echo -e "${RED}[错误] 压缩包内未找到 gost-panel 二进制${PLAIN}"
         exit 1
     fi
 
-    mv "${tmp_dir}/gost-panel-linux-${arch}" /tmp/gost-panel
+    mv "$extracted" /tmp/gost-panel
     chmod +x /tmp/gost-panel
     rm -rf "${tmp_dir}"
     echo -e "${GREEN}✅ 下载完成${PLAIN}"

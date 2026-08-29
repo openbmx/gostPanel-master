@@ -61,3 +61,18 @@ admin:
   # 它会把密码强制重置为上面的 password 并吊销所有已签发的 Token。
   # 重置完成后务必改回 false，否则每次启动都会重置。
   force_reset: false
+
+# 面板内在线更新
+update:
+  # 关闭后仍可在面板中查看版本与更新日志，但不能执行升级/回滚。
+  # 注意：即便开启，以下情况也会自动拒绝——
+  #   - Docker 部署（容器重建会让更新失效，应改用 docker compose pull）
+  #   - 非发布构建（本地 make build 得到的版本号是 dev）
+  #   - 程序所在目录不可写
+  enabled: true
+
+  # 可选的下载加速前缀，形如 https://ghfast.top/
+  #
+  # 安全：镜像只用于下载体积较大的二进制包，校验和文件始终直连 GitHub 获取。
+  # 因此镜像不可信也无法投毒——它没法同时替换掉校验基准。
+  mirror_prefix: ""

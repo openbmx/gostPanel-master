@@ -23,6 +23,11 @@ const weakDefaultJWTSecret = "zxcvbnm123456"
 // 检测到它时会替换为随机初始口令，避免公开默认凭据流入生产环境。
 const weakDefaultAdminPassword = "admin123"
 
+// defaultUpdateRepo 在线更新的默认来源仓库。
+// 面板会从这里的 Releases 下载并替换自己的二进制，
+// 因此它必须指向本项目自身 —— 指向别处等于安装别人构建的产物。
+const defaultUpdateRepo = "openbmx/gostPanel-master"
+
 // Config 应用配置结构
 type Config struct {
 	Server   ServerConfig   `mapstructure:"server"`
@@ -30,6 +35,24 @@ type Config struct {
 	JWT      JWTConfig      `mapstructure:"jwt"`
 	Log      LogConfig      `mapstructure:"log"`
 	Admin    AdminConfig    `mapstructure:"admin"`
+	Update   UpdateConfig   `mapstructure:"update"`
+}
+
+// UpdateConfig 面板内在线更新配置
+type UpdateConfig struct {
+	// Enabled 是否允许从面板内执行更新。关闭后仍可查看版本信息。
+	Enabled bool `mapstructure:"enabled"`
+
+	// Repo 更新来源仓库，形如 owner/name。
+	// 安全：刻意不提供环境变量覆盖 —— 能改环境变量的人本就能改二进制，
+	// 但把它做成"可远程配置"会给面板增加一条把自己指向任意仓库的路径。
+	Repo string `mapstructure:"repo"`
+
+	// MirrorPrefix 可选的下载加速前缀，形如 https://ghfast.top/
+	//
+	// 安全：仅用于加速下载体积较大的二进制包；校验和文件始终直连 GitHub 获取。
+	// 因此即便镜像不可信也无法投毒 —— 它没法同时替换掉校验基准。
+	MirrorPrefix string `mapstructure:"mirror_prefix"`
 }
 
 // ServerConfig 服务器配置
@@ -111,6 +134,10 @@ func Load(configPath string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
 
+	// 布尔项必须用 SetDefault 而非 setDefaults()：解析后无法区分
+	// "显式配置为 false" 和 "根本没配置"，在 setDefaults 里会把用户的 false 覆盖掉。
+	v.SetDefault("update.enabled", true)
+
 	// 环境变量覆盖（便于 Docker / Kubernetes 部署）：
 	// 例如 GOSTPANEL_SERVER_PORT、GOSTPANEL_JWT_SECRET、GOSTPANEL_ADMIN_PASSWORD。
 	v.SetEnvPrefix("GOSTPANEL")
@@ -125,6 +152,7 @@ func Load(configPath string) (*Config, error) {
 		"jwt.secret", "jwt.expire",
 		"log.level", "log.format", "log.output",
 		"admin.username", "admin.password", "admin.force_reset",
+		"update.enabled", "update.mirror_prefix",
 	} {
 		_ = v.BindEnv(key)
 	}
@@ -249,6 +277,12 @@ func setDefaults(cfg *Config) {
 			cfg.Admin.Password = weakDefaultAdminPassword
 			fmt.Fprintln(os.Stderr, "[安全警告] 生成随机初始密码失败，回退到弱默认口令 admin123，请务必登录后立即修改！")
 		}
+	}
+
+	// 在线更新默认值。默认开启但受多重前置条件约束（见 UpdateService.checkUpdatable）：
+	// Docker 环境、非发布构建、二进制目录不可写时都会自动拒绝。
+	if cfg.Update.Repo == "" {
+		cfg.Update.Repo = defaultUpdateRepo
 	}
 
 	// TLS 配置校验：显式开启但未提供证书时直接失败，避免"以为开了 HTTPS 实际是明文"。

@@ -26,6 +26,25 @@ func New(code int, message string, httpCode int) *BizError {
 	}
 }
 
+// WithDetail 基于既有业务错误派生一个带具体原因的副本。
+//
+// 用于那些「错误类型固定、但原因需要告诉管理员」的场景，典型如在线更新：
+// 失败原因（缺少适配产物、校验和不匹配、目录不可写）本身就是管理员要看的信息，
+// 而不是应当隐藏的内部细节。注意它返回新实例，不会修改共享的错误变量。
+func WithDetail(base *BizError, detail string) *BizError {
+	if base == nil {
+		return nil
+	}
+	if detail == "" {
+		return base
+	}
+	return &BizError{
+		Code:     base.Code,
+		Message:  base.Message + "：" + detail,
+		HTTPCode: base.HTTPCode,
+	}
+}
+
 // ==================== 节点相关错误 (100xx) ====================
 
 var (
@@ -154,6 +173,27 @@ var (
 	ErrObserverTokenInvalid = New(10420, "上报令牌无效", http.StatusUnauthorized)
 	// ErrTurnstileConfigIncomplete 开启人机验证但密钥不完整
 	ErrTurnstileConfigIncomplete = New(10421, "开启人机验证需要同时填写 Site Key 与 Secret Key", http.StatusBadRequest)
+)
+
+// ==================== 在线更新相关错误 (105xx) ====================
+
+var (
+	// ErrUpdateNotSupported 当前环境不支持面板内更新（Docker / 非发布构建 / 目录不可写）
+	ErrUpdateNotSupported = New(10501, "当前环境不支持在线更新", http.StatusBadRequest)
+	// ErrUpdateInProgress 已有更新在执行
+	ErrUpdateInProgress = New(10502, "已有更新任务正在执行，请稍后再试", http.StatusConflict)
+	// ErrNoUpdateAvailable 已是最新版本
+	ErrNoUpdateAvailable = New(10503, "当前已是最新版本", http.StatusConflict)
+	// ErrUpdateFailed 更新过程失败
+	ErrUpdateFailed = New(10504, "更新失败", http.StatusInternalServerError)
+	// ErrChecksumMismatch 下载产物校验和不匹配（可能被篡改或下载损坏）
+	ErrChecksumMismatch = New(10505, "下载文件校验失败，已中止更新", http.StatusInternalServerError)
+	// ErrChecksumMissing 发布中缺少校验和文件，无法验证完整性
+	ErrChecksumMissing = New(10506, "无法验证下载文件的完整性，已中止更新", http.StatusInternalServerError)
+	// ErrRollbackVersionNotAllowed 目标版本不在允许回滚的列表中
+	ErrRollbackVersionNotAllowed = New(10507, "该版本不在可回滚列表中", http.StatusBadRequest)
+	// ErrNoBackupAvailable 没有可用的备份
+	ErrNoBackupAvailable = New(10508, "没有可回滚的备份版本", http.StatusBadRequest)
 )
 
 // ==================== 系统/配置相关错误 (104xx) ====================

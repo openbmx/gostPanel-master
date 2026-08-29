@@ -38,6 +38,9 @@ const (
 	ActionStart          = "start"           // 启动
 	ActionStop           = "stop"            // 停止
 	ActionViewSecret     = "view_secret"     // 查看凭据（安全审计）
+	ActionSystemUpdate   = "system_update"   // 在线更新（安全审计）
+	ActionSystemRollback = "system_rollback" // 版本回滚（安全审计）
+	ActionSystemRestart  = "system_restart"  // 重启服务（安全审计）
 )
 
 // 资源类型常量
@@ -46,4 +49,5 @@ const (
 	ResourceTypeRule   = "rule"   // 规则
 	ResourceTypeTunnel = "tunnel" // 隧道
 	ResourceTypeAuth   = "auth"   // 认证
+	ResourceTypeSystem = "system" // 系统
 )

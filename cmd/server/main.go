@@ -117,7 +117,7 @@ func main() {
 		Secret: cfg.JWT.Secret,
 		Expire: cfg.JWT.Expire,
 	}
-	r := router.NewRouter(db, jwtCfg, &cfg.Server)
+	r := router.NewRouter(db, jwtCfg, &cfg.Server, &cfg.Update)
 	r.Setup(engine)
 
 	srv := &http.Server{

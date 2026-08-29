@@ -14,17 +14,19 @@ import (
 
 // Router 路由配置
 type Router struct {
-	db     *gorm.DB
-	jwtCfg *jwt.Config
-	srvCfg *config.ServerConfig
+	db        *gorm.DB
+	jwtCfg    *jwt.Config
+	srvCfg    *config.ServerConfig
+	updateCfg *config.UpdateConfig
 }
 
 // NewRouter 创建路由实例
-func NewRouter(db *gorm.DB, jwtCfg *jwt.Config, srvCfg *config.ServerConfig) *Router {
+func NewRouter(db *gorm.DB, jwtCfg *jwt.Config, srvCfg *config.ServerConfig, updateCfg *config.UpdateConfig) *Router {
 	return &Router{
-		db:     db,
-		jwtCfg: jwtCfg,
-		srvCfg: srvCfg,
+		db:        db,
+		jwtCfg:    jwtCfg,
+		srvCfg:    srvCfg,
+		updateCfg: updateCfg,
 	}
 }
 
@@ -46,6 +48,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	systemConfigRepo := repository.NewSystemConfigRepository(r.db)
 	systemConfigService := service.NewSystemConfigService(systemConfigRepo)
 	backupService := service.NewBackupService(r.db)
+	updateService := service.NewUpdateService(r.updateCfg, config.Version)
 
 	// 全局中间件
 	// SecurityHeaders 放在最前面，保证包括错误响应在内的所有出站响应都带上安全头
@@ -81,6 +84,7 @@ func (r *Router) Setup(engine *gin.Engine) {
 	logHandler := handler.NewLogHandler(logService)
 	observerHandler := handler.NewObserverHandler(observerService)
 	systemConfigHandler := handler.NewSystemConfigHandler(systemConfigService, backupService)
+	updateHandler := handler.NewUpdateHandler(updateService, logService)
 
 	// 公开路由（无需管理员登录）
 	{
@@ -144,6 +148,16 @@ func (r *Router) Setup(engine *gin.Engine) {
 		authRoutes.PUT("/system/config", systemConfigHandler.UpdateConfig)
 		authRoutes.POST("/system/email/test", systemConfigHandler.TestEmail)
 		authRoutes.POST("/system/backup", systemConfigHandler.Backup)
+
+		// 版本与在线更新。
+		// 更新会替换正在运行的二进制，是面板中破坏力最大的一组操作，
+		// 全部要求管理员登录态，且每次调用都写入操作日志。
+		authRoutes.GET("/system/version", updateHandler.GetVersion)
+		authRoutes.GET("/system/update/check", updateHandler.CheckUpdate)
+		authRoutes.POST("/system/update", updateHandler.PerformUpdate)
+		authRoutes.GET("/system/update/rollback-versions", updateHandler.ListRollbackVersions)
+		authRoutes.POST("/system/update/rollback", updateHandler.Rollback)
+		authRoutes.POST("/system/restart", updateHandler.Restart)
 	}
 
 	// 静态文件

@@ -159,11 +159,23 @@ backup_current() {
 }
 
 # 解析 API 端口用于健康检查
+# 只认顶层 api: 段里的 addr。GOST 3.3.0 起会把面板下发的服务一并写回本文件，
+# 文件里于是有多个 addr，排在最前面的通常是某条规则或隧道的端口，而不是 API 的。
 get_api_port() {
     local port=""
     if [ -f "$CONF_FILE" ]; then
-        # 形如  addr: ":39000"
-        port=$(grep -E '^\s*addr:' "$CONF_FILE" | head -n1 | sed -E 's/.*addr:\s*"?:?([0-9]+)"?.*/\1/')
+        # 形如  addr: ":39000" / addr: :39000 / addr: "0.0.0.0:39000"
+        port=$(awk '
+            /^[^[:space:]#]/ { in_api = ($0 ~ /^api:/) }
+            in_api && /^[[:space:]]+addr:/ {
+                v = $0
+                sub(/^[[:space:]]+addr:[[:space:]]*/, "", v)
+                sub(/[[:space:]]+#.*$/, "", v)
+                gsub(/["\047[:space:]]/, "", v)
+                n = split(v, parts, ":")
+                print parts[n]
+                exit
+            }' "$CONF_FILE")
     fi
     echo "$port"
 }

@@ -35,6 +35,10 @@ export const useSystemStore = defineStore('system', () => {
                 if (config.copyright) {
                     copyright.value = config.copyright
                     localStorage.setItem('copyright', config.copyright)
+                } else {
+                    // 清空版权信息后要同步清掉缓存，否则页脚会一直显示旧值
+                    copyright.value = ''
+                    localStorage.removeItem('copyright')
                 }
 
                 turnstileEnabled.value = !!config.turnstileEnabled

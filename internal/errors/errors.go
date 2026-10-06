@@ -208,7 +208,8 @@ var (
 	// ErrSMTPClientFailed 创建SMTP客户端失败
 	ErrSMTPClientFailed = New(10404, "创建SMTP客户端失败", http.StatusInternalServerError)
 	// ErrSMTPAuthFailed SMTP认证失败
-	ErrSMTPAuthFailed = New(10405, "SMTP认证失败", http.StatusUnauthorized)
+	// 注意不能用 401：前端拦截器把 401 当作面板登录失效，会直接把管理员踢回登录页
+	ErrSMTPAuthFailed = New(10405, "SMTP认证失败", http.StatusBadRequest)
 	// ErrSMTPSenderFailed 设置发件人失败
 	ErrSMTPSenderFailed = New(10406, "设置发件人失败", http.StatusInternalServerError)
 	// ErrSMTPRecipientFailed 设置收件人失败
@@ -231,6 +232,12 @@ var (
 	ErrObserverCreateFailed = New(10414, "创建流量监控失败", http.StatusInternalServerError)
 	// ErrExtractHostFailed 提取主机IP失败
 	ErrExtractHostFailed = New(10415, "无法从API地址提取主机IP", http.StatusInternalServerError)
+	// ErrSMTPAddressInvalid 发件人或收件人地址格式不正确
+	ErrSMTPAddressInvalid = New(10416, "发件人或收件人邮箱地址格式不正确", http.StatusBadRequest)
+	// ErrSMTPRejected 服务器接收正文后拒收（反垃圾拦截等）
+	ErrSMTPRejected = New(10417, "SMTP 服务器拒收了邮件", http.StatusInternalServerError)
+	// ErrSMTPTimeout 连接或会话超时（与“拒收”区分开，超时时邮件可能其实已经投递）
+	ErrSMTPTimeout = New(10418, "SMTP 服务器响应超时", http.StatusInternalServerError)
 )
 
 // ==================== 隧道相关补全 (102xx) ====================

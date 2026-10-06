@@ -83,10 +83,18 @@
         
         <!-- 底部版权 (Footer) -->
         <div class="footer">
-          <span>Copyright © 2023-2026 Gost Panel · </span>
-          <a href="https://github.com/openbmx/gostPanel-master" target="_blank">
-            https://github.com/openbmx/gostPanel-master
-          </a>
+          <template v-if="copyrightParts">
+            <template v-for="(part, index) in copyrightParts" :key="index">
+              <a v-if="part.link" :href="part.text" target="_blank" rel="noopener noreferrer">{{ part.text }}</a>
+              <span v-else>{{ part.text }}</span>
+            </template>
+          </template>
+          <template v-else>
+            <span>Copyright © 2023-2026 Gost Panel · </span>
+            <a :href="DEFAULT_COPYRIGHT" target="_blank" rel="noopener noreferrer">
+              {{ DEFAULT_COPYRIGHT }}
+            </a>
+          </template>
         </div>
       </div>
     </el-container>
@@ -158,6 +166,27 @@ const systemStore = useSystemStore()
 
 const siteTitle = computed(() => systemStore.siteTitle)
 const logoUrl = computed(() => systemStore.logoUrl)
+
+// 系统设置里的“版权信息”。留空或仍是安装时写入的默认值时显示默认页脚；
+// 否则按纯文本显示（其中的 http(s) 链接转成可点击的链接），不渲染 HTML，避免 XSS。
+const DEFAULT_COPYRIGHT = 'https://github.com/openbmx/gostPanel-master'
+// 链接只取到空白、中日韩文字或全角标点之前，末尾的英文标点也不算进链接，
+// 否则 “https://example.com，欢迎” 会整段变成一个错误的链接
+const URL_PATTERN = /https?:\/\/[^\s<>"'\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+/g
+const copyrightParts = computed(() => {
+  const text = (systemStore.copyright || '').trim()
+  if (!text || text === DEFAULT_COPYRIGHT) return null
+  const parts = []
+  let last = 0
+  for (const match of text.matchAll(URL_PATTERN)) {
+    const url = match[0].replace(/[.,;:!?)\]]+$/, '')
+    if (match.index > last) parts.push({ text: text.slice(last, match.index), link: false })
+    parts.push({ text: url, link: true })
+    last = match.index + url.length
+  }
+  if (last < text.length) parts.push({ text: text.slice(last), link: false })
+  return parts
+})
 
 onMounted(() => {
   systemStore.fetchSystemConfig()

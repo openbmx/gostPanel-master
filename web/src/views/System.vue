@@ -22,7 +22,7 @@
               <el-input v-model="configForm.logoUrl" placeholder="请输入Logo URL" />
             </el-form-item>
             <el-form-item label="版权信息" prop="copyright">
-              <el-input v-model="configForm.copyright" placeholder="请输入版权信息" />
+              <el-input v-model="configForm.copyright" placeholder="显示在页面底部，留空则显示默认版权信息" />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="loading" @click="handleSave('config')">保存设置</el-button>
@@ -270,6 +270,9 @@ import {
     getSystemConfig, updateSystemConfig, sendTestEmail, backupSystem,
     checkUpdate, performUpdate, getRollbackVersions, rollback, restartPanel
 } from '@/api/system'
+import { useSystemStore } from '@/store/system'
+
+const systemStore = useSystemStore()
 
 // 服务端用该占位符表示"此密钥已设置但不回显真实值"。
 // 前端在载入时把它从表单值里剥离（否则用户点"显示密码"会看到这串内部标记），
@@ -540,6 +543,8 @@ const handleSave = async (type) => {
         
         await updateSystemConfig(payload)
         ElMessage.success('保存成功')
+        // 站点标题、Logo、版权信息由全局 store 驱动，保存后立即刷新，无需整页重载
+        systemStore.fetchSystemConfig()
     } catch (error) {
         console.error('保存失败:', error)
     } finally {

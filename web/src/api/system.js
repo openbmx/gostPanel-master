@@ -80,7 +80,10 @@ export function sendTestEmail(data) {
     return request({
         url: '/system/email/test',
         method: 'post',
-        data
+        data,
+        // 后端 SMTP 会话最长约 45 秒（服务器收完正文后才做反垃圾检查，可能较慢），
+        // 默认 10 秒会让前端先超时，管理员只能看到“网络错误”而看不到服务器的真实应答
+        timeout: 60 * 1000
     })
 }
 

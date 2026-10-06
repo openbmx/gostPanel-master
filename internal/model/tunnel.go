@@ -14,6 +14,12 @@ const (
 	TunnelStatusError   TunnelStatus = "error"
 )
 
+// WantsRunning 用户是否希望该隧道处于运行状态。
+// error 表示“应当运行但当前异常”，看门狗会持续尝试恢复；只有 stopped 才是用户主动停止。
+func (s TunnelStatus) WantsRunning() bool {
+	return s == TunnelStatusRunning || s == TunnelStatusError
+}
+
 // TunnelHop describes one relay hop in an ordered tunnel chain.
 type TunnelHop struct {
 	NodeID    uint   `json:"node_id"`

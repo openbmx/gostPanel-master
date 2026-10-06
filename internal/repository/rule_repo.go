@@ -95,6 +95,20 @@ func (r *RuleRepository) List(opt *QueryOption) ([]model.GostRule, int64, error)
 	return rules, total, nil
 }
 
+// ListDeletedIDs 返回已删除（软删除）的规则 ID，供看门狗识别并清理节点上的残留服务
+func (r *RuleRepository) ListDeletedIDs() ([]uint, error) {
+	var ids []uint
+	err := r.DB.Unscoped().Model(&model.GostRule{}).Where("deleted_at IS NOT NULL").Pluck("id", &ids).Error
+	return ids, err
+}
+
+// IsDeleted 判断规则是否已被删除（软删除）；从未存在过的 ID 返回 false
+func (r *RuleRepository) IsDeleted(id uint) (bool, error) {
+	var count int64
+	err := r.DB.Unscoped().Model(&model.GostRule{}).Where("id = ? AND deleted_at IS NOT NULL", id).Count(&count).Error
+	return count > 0, err
+}
+
 // FindByNodeID 根据节点 ID 查询规则
 func (r *RuleRepository) FindByNodeID(nodeID uint) ([]model.GostRule, error) {
 	var rules []model.GostRule
@@ -146,6 +160,13 @@ func (r *RuleRepository) ExistsByPort(nodeID uint, port int, excludeID ...uint) 
 // UpdateStatus 更新规则状态
 func (r *RuleRepository) UpdateStatus(id uint, status model.RuleStatus) error {
 	return r.UpdateField(&model.GostRule{}, id, "status", status)
+}
+
+// CompareAndSetStatus 仅当当前状态仍为 from 时才改为 to，返回是否生效。
+// 不持锁的后台任务（看门狗）校正状态时必须用它，否则会覆盖用户刚刚做出的停止/编辑。
+func (r *RuleRepository) CompareAndSetStatus(id uint, from, to model.RuleStatus) (bool, error) {
+	res := r.DB.Model(&model.GostRule{}).Where("id = ? AND status = ?", id, from).Update("status", to)
+	return res.RowsAffected > 0, res.Error
 }
 
 // UpdateServiceID 更新服务 ID

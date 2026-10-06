@@ -85,21 +85,27 @@
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
+            <el-tooltip v-if="row.status === 'error'" :content="ERROR_STATUS_TIP" placement="top">
+              <el-tag :type="getStatusType(row.status)" size="small">
+                {{ getStatusText(row.status) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" align="center" fixed="right">
+        <el-table-column label="操作" width="240" align="center" fixed="right">
           <template #default="{ row }">
-            <el-button 
-              v-if="row.status !== 'running'" 
-              type="success" link size="small" 
+            <!-- 错误状态表示应当运行但当前异常：既可立即重试启动，也可停止以结束看门狗的自动重试 -->
+            <el-button
+              v-if="row.status !== 'running'"
+              type="success" link size="small"
               @click="handleStart(row)"
             >启动</el-button>
-            <el-button 
-              v-else 
-              type="warning" link size="small" 
+            <el-button
+              v-if="row.status !== 'stopped'"
+              type="warning" link size="small"
               @click="handleStop(row)"
             >停止</el-button>
             <el-button type="primary" link size="small" @click="openDialog(row)">编辑</el-button>
@@ -292,6 +298,8 @@ const getStatusText = (status) => {
   const map = { running: '运行中', stopped: '已停止', error: '错误' }
   return map[status] || status
 }
+
+const ERROR_STATUS_TIP = '运行异常，看门狗正在自动重试恢复；不再需要时请点击停止'
 
 // 格式化字节数
 const getNodeName = (id) => {

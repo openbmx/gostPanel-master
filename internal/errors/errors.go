@@ -95,7 +95,7 @@ var (
 	// ErrTunnelNotFound 隧道不存在
 	ErrTunnelNotFound = New(10201, "隧道不存在", http.StatusNotFound)
 	// ErrTunnelRunning 隧道正在运行中
-	ErrTunnelRunning = New(10202, "隧道正在运行中，请先停止", http.StatusBadRequest)
+	ErrTunnelRunning = New(10202, "隧道正在运行或处于错误状态，请先停止", http.StatusBadRequest)
 	// ErrTunnelNameExists 隧道名称已存在
 	ErrTunnelNameExists = New(10203, "隧道名称已存在", http.StatusBadRequest)
 	// ErrTunnelInUse 隧道正在被规则使用

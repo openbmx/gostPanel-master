@@ -15,6 +15,12 @@ const (
 	RuleStatusError   RuleStatus = "error"   // 错误
 )
 
+// WantsRunning 用户是否希望该规则处于运行状态。
+// error 表示“应当运行但当前异常”，看门狗会持续尝试恢复；只有 stopped 才是用户主动停止。
+func (s RuleStatus) WantsRunning() bool {
+	return s == RuleStatusRunning || s == RuleStatusError
+}
+
 // RuleType 规则类型
 type RuleType string
 

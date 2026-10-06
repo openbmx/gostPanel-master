@@ -242,31 +242,45 @@ func (c *Client) SaveConfig() error {
 	return nil
 }
 
-// exists 检查指定路径的资源是否存在
-func (c *Client) exists(path string) bool {
+// exists 检查指定路径的资源是否存在。
+//
+// 查询失败时必须返回错误，而不是当作“不存在”：此前那样做，删除会在节点 API 抖动时
+// 静默跳过，紧接着的创建又因为旧对象还在而被跳过，结果旧服务（连同它引用的旧链路）
+// 原样留在节点上，面板却以为已经按新配置重建成功。
+func (c *Client) exists(path string) (bool, error) {
 	resp, err := c.doRequest("GET", path, nil)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return false
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("查询 %s 失败: HTTP %d %s", path, resp.StatusCode, string(body))
 	}
 
 	var gResp GostResponse
 	if err = json.NewDecoder(resp.Body).Decode(&gResp); err != nil {
-		return false
+		return false, fmt.Errorf("解析 %s 的响应失败: %w", path, err)
 	}
 
-	// 根据用户提供的 curl 结果，不存在时 data 为 null (RawMessage 为 "null")
-	return string(gResp.Data) != "null" && len(gResp.Data) > 0
+	// 不存在时 GOST 返回 200 与 {"data":null}（3.2.6 / 3.3.0 实测，各类对象一致）
+	return string(gResp.Data) != "null" && len(gResp.Data) > 0, nil
+}
+
+// ServiceExists 判断节点上是否存在指定名称的服务
+func (c *Client) ServiceExists(name string) (bool, error) {
+	return c.exists(fmt.Sprintf("/config/services/%s", name))
 }
 
 // CreateService 创建服务 (幂等)
 func (c *Client) CreateService(svc *ServiceConfig) error {
 	path := fmt.Sprintf("/config/services/%s", svc.Name)
-	if c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
 		logger.Debugf("服务 %s 已存在，跳过创建", svc.Name)
 		return nil
 	}
@@ -288,7 +302,11 @@ func (c *Client) CreateService(svc *ServiceConfig) error {
 // DeleteService 删除服务 (幂等)
 func (c *Client) DeleteService(name string) error {
 	path := fmt.Sprintf("/config/services/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("服务 %s 不存在，跳过删除", name)
 		return nil
 	}
@@ -310,7 +328,11 @@ func (c *Client) DeleteService(name string) error {
 // CreateChain 创建链 (幂等)
 func (c *Client) CreateChain(chain *ChainConfig) error {
 	path := fmt.Sprintf("/config/chains/%s", chain.Name)
-	if c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
 		logger.Debugf("链 %s 已存在，跳过创建", chain.Name)
 		return nil
 	}
@@ -329,10 +351,49 @@ func (c *Client) CreateChain(chain *ChainConfig) error {
 	return nil
 }
 
+// UpsertChain 创建链；已存在时用 PUT 覆盖为当前定义。
+// 启动隧道必须用它而不是 CreateChain：节点上可能残留着同名的旧链（例如停止时节点离线、
+// 或链仍被其它服务引用而未删除），跳过创建会让流量继续走编辑前的旧跳点。
+func (c *Client) UpsertChain(chain *ChainConfig) error {
+	path := fmt.Sprintf("/config/chains/%s", chain.Name)
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	method, target := "POST", "/config/chains"
+	if exists {
+		method, target = "PUT", path
+	}
+
+	resp, err := c.doRequest(method, target, chain)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("写入链失败: %s", string(body))
+	}
+	return nil
+}
+
+// ChainExists 判断节点上是否存在指定的链。
+//
+// 注意：服务引用的链不存在时，GOST 不会报错，而是直接连接转发目标（3.2.6/3.3.0 实测），
+// 流量会绕过隧道。下发引用链的服务之前必须先确认链存在。
+func (c *Client) ChainExists(name string) (bool, error) {
+	return c.exists(fmt.Sprintf("/config/chains/%s", name))
+}
+
 // DeleteChain 删除链 (幂等)
 func (c *Client) DeleteChain(name string) error {
 	path := fmt.Sprintf("/config/chains/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("链 %s 不存在，跳过删除", name)
 		return nil
 	}
@@ -474,7 +535,11 @@ func BuildFullForwardService(name string, listenPort int, targets []string, stra
 // CreateLimiter 创建限流器 (幂等)
 func (c *Client) CreateLimiter(limiter *LimiterConfig) error {
 	path := fmt.Sprintf("/config/limiters/%s", limiter.Name)
-	if c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
 		logger.Debugf("限流器 %s 已存在，跳过创建", limiter.Name)
 		return nil
 	}
@@ -496,7 +561,11 @@ func (c *Client) CreateLimiter(limiter *LimiterConfig) error {
 // DeleteLimiter 删除限流器 (幂等)
 func (c *Client) DeleteLimiter(name string) error {
 	path := fmt.Sprintf("/config/limiters/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("限流器 %s 不存在，跳过删除", name)
 		return nil
 	}
@@ -524,8 +593,13 @@ func (c *Client) DeleteLimiter(name string) error {
 func (c *Client) UpsertObserver(observer *ObserverConfig) error {
 	path := fmt.Sprintf("/config/observers/%s", observer.Name)
 
+	exists, err := c.exists(path)
+	if err != nil {
+		logger.Warnf("查询观察器失败: %v", err)
+		return errors.ErrTunnelObserverCreateFailed
+	}
 	method, target := "POST", "/config/observers"
-	if c.exists(path) {
+	if exists {
 		method, target = "PUT", path
 	}
 
@@ -547,7 +621,11 @@ func (c *Client) UpsertObserver(observer *ObserverConfig) error {
 // DeleteObserver 删除观察器 (幂等)
 func (c *Client) DeleteObserver(name string) error {
 	path := fmt.Sprintf("/config/observers/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("观察器 %s 不存在，跳过删除", name)
 		return nil
 	}
@@ -569,7 +647,11 @@ func (c *Client) DeleteObserver(name string) error {
 // CreateCLimiter 创建并发连接数限制器 (幂等)
 func (c *Client) CreateCLimiter(climiter *CLimiterConfig) error {
 	path := fmt.Sprintf("/config/climiters/%s", climiter.Name)
-	if c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
 		logger.Debugf("并发连接限制器 %s 已存在，跳过创建", climiter.Name)
 		return nil
 	}
@@ -591,7 +673,11 @@ func (c *Client) CreateCLimiter(climiter *CLimiterConfig) error {
 // DeleteCLimiter 删除并发连接数限制器 (幂等)
 func (c *Client) DeleteCLimiter(name string) error {
 	path := fmt.Sprintf("/config/climiters/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("并发连接限制器 %s 不存在，跳过删除", name)
 		return nil
 	}
@@ -613,7 +699,11 @@ func (c *Client) DeleteCLimiter(name string) error {
 // CreateRLimiter 创建请求速率限制器 (幂等)
 func (c *Client) CreateRLimiter(rlimiter *RLimiterConfig) error {
 	path := fmt.Sprintf("/config/rlimiters/%s", rlimiter.Name)
-	if c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
 		logger.Debugf("请求速率限制器 %s 已存在，跳过创建", rlimiter.Name)
 		return nil
 	}
@@ -635,7 +725,11 @@ func (c *Client) CreateRLimiter(rlimiter *RLimiterConfig) error {
 // DeleteRLimiter 删除请求速率限制器 (幂等)
 func (c *Client) DeleteRLimiter(name string) error {
 	path := fmt.Sprintf("/config/rlimiters/%s", name)
-	if !c.exists(path) {
+	exists, err := c.exists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Debugf("请求速率限制器 %s 不存在，跳过删除", name)
 		return nil
 	}

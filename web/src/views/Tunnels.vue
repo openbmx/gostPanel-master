@@ -50,15 +50,19 @@
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">{{ getStatusText(row.status) }}</el-tag>
+            <el-tooltip v-if="row.status === 'error'" :content="ERROR_STATUS_TIP" placement="top">
+              <el-tag :type="getStatusType(row.status)" size="small">{{ getStatusText(row.status) }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="getStatusType(row.status)" size="small">{{ getStatusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-        <el-table-column label="操作" width="180" align="center" fixed="right">
+        <el-table-column label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
+            <!-- 错误状态表示应当运行但当前异常：既可立即重试启动，也可停止以结束看门狗的自动重试 -->
             <el-button v-if="row.status !== 'running'" type="success" link size="small" @click="handleStart(row)">启动</el-button>
-            <el-button v-else type="warning" link size="small" @click="handleStop(row)">停止</el-button>
-            <el-button type="primary" link size="small" :disabled="row.status === 'running'" @click="openDialog(row)">编辑</el-button>
+            <el-button v-if="row.status !== 'stopped'" type="warning" link size="small" @click="handleStop(row)">停止</el-button>
+            <el-button type="primary" link size="small" :disabled="row.status !== 'stopped'" @click="openDialog(row)">编辑</el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -246,6 +250,8 @@ const getStatusText = (status) => {
   return map[status] || status
 }
 
+const ERROR_STATUS_TIP = '运行异常，看门狗正在自动重试恢复；不再需要时请点击停止'
+
 const getNodeName = (id) => {
   return nodeList.value.find(node => node.id === id)?.name || '-'
 }
@@ -319,7 +325,8 @@ const toFormHops = (row) => {
 }
 
 const openDialog = (row = null) => {
-  if (row?.status === 'running') {
+  // 运行中与错误状态（看门狗仍在按旧配置重试）都要先停止再编辑
+  if (row && row.status !== 'stopped') {
     ElMessage.warning('请先停止隧道再编辑')
     return
   }

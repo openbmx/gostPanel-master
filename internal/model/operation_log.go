@@ -41,6 +41,8 @@ const (
 	ActionSystemUpdate   = "system_update"   // 在线更新（安全审计）
 	ActionSystemRollback = "system_rollback" // 版本回滚（安全审计）
 	ActionSystemRestart  = "system_restart"  // 重启服务（安全审计）
+	ActionRecover        = "recover"         // 看门狗自动恢复
+	ActionCleanup        = "cleanup"         // 看门狗清理节点残留
 )
 
 // 资源类型常量

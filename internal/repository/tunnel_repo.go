@@ -77,9 +77,30 @@ func (r *TunnelRepository) List(opt *QueryOption) ([]model.GostTunnel, int64, er
 	return tunnels, total, nil
 }
 
+// ListDeletedIDs 返回已删除（软删除）的隧道 ID，供看门狗识别并清理节点上的残留 relay/chain
+func (r *TunnelRepository) ListDeletedIDs() ([]uint, error) {
+	var ids []uint
+	err := r.DB.Unscoped().Model(&model.GostTunnel{}).Where("deleted_at IS NOT NULL").Pluck("id", &ids).Error
+	return ids, err
+}
+
+// IsDeleted 判断隧道是否已被删除（软删除）；从未存在过的 ID 返回 false
+func (r *TunnelRepository) IsDeleted(id uint) (bool, error) {
+	var count int64
+	err := r.DB.Unscoped().Model(&model.GostTunnel{}).Where("id = ? AND deleted_at IS NOT NULL", id).Count(&count).Error
+	return count > 0, err
+}
+
 // UpdateStatus 更新隧道状态
 func (r *TunnelRepository) UpdateStatus(id uint, status model.TunnelStatus) error {
 	return r.UpdateField(&model.GostTunnel{}, id, "status", status)
+}
+
+// CompareAndSetStatus 仅当当前状态仍为 from 时才改为 to，返回是否生效。
+// 不持锁的后台任务（看门狗）校正状态时必须用它，否则会覆盖用户刚刚做出的停止/编辑。
+func (r *TunnelRepository) CompareAndSetStatus(id uint, from, to model.TunnelStatus) (bool, error) {
+	res := r.DB.Model(&model.GostTunnel{}).Where("id = ? AND status = ?", id, from).Update("status", to)
+	return res.RowsAffected > 0, res.Error
 }
 
 // CountAll 统计总数

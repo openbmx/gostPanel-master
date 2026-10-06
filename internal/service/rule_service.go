@@ -4,7 +4,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"gost-panel/internal/dto"
 	"gost-panel/internal/errors"
@@ -26,10 +25,6 @@ type RuleService struct {
 	sysRepo       *repository.SystemConfigRepository
 	logService    *LogService
 	tunnelService *TunnelService
-
-	// ruleLocks 为每条规则提供独立的事务锁，串行化该规则的启动/停止/切换/故障转移操作，
-	// 避免后台 AutoFailover 与用户手动操作并发修改同一规则时产生的状态错乱。
-	ruleLocks sync.Map // map[uint]*sync.Mutex
 }
 
 // NewRuleService creates a rule service.
@@ -44,23 +39,17 @@ func NewRuleService(db *gorm.DB) *RuleService {
 	}
 }
 
-// lockRule 获取指定规则的事务锁，返回解锁函数。
+// lockRule 获取指定规则的事务锁（包级别，见 locks.go），返回解锁函数。
+// 串行化该规则的启动/停止/切换/故障转移/看门狗恢复，避免后台任务与用户手动操作
+// 并发修改同一规则时产生的状态错乱。
 func (s *RuleService) lockRule(id uint) func() {
-	v, _ := s.ruleLocks.LoadOrStore(id, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	return lockByID(&ruleLocks, id)
 }
 
 // tryLockRule 尝试获取规则事务锁，成功返回解锁函数与 true；
 // 若锁被占用（说明该规则正被其他操作处理）则返回 false，调用方应跳过本次操作。
 func (s *RuleService) tryLockRule(id uint) (func(), bool) {
-	v, _ := s.ruleLocks.LoadOrStore(id, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	if !mu.TryLock() {
-		return nil, false
-	}
-	return mu.Unlock, true
+	return tryLockByID(&ruleLocks, id)
 }
 
 // Create creates a rule.
@@ -184,7 +173,22 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		return nil, errors.ErrRulePortExists
 	}
 
-	if rule.Type == model.RuleTypeTunnel && rule.Status == model.RuleStatusRunning {
+	// error 同样表示“应当运行”（看门狗正在重试），编辑后要按新配置重新拉起。
+	prevStatus := rule.Status
+	wasRunning := prevStatus.WantsRunning()
+	if wasRunning {
+		// 必须先在节点上删掉旧服务。入口节点离线时删不掉：旧配置会留在节点上继续转发，
+		// 看门狗还会把它当成已恢复，新配置永远不会生效，所以直接拒绝。
+		node, err := s.nodeRepo.FindByID(s.getEntryNodeID(rule))
+		if err != nil {
+			return nil, errors.ErrNodeNotFound
+		}
+		if node.Status == model.NodeStatusOffline {
+			return nil, errors.ErrNodeOffline
+		}
+	}
+	// 异常中的规则不校验目标隧道是否可用：它本就在等隧道恢复，校验会让改名之类的编辑也无法保存
+	if rule.Type == model.RuleTypeTunnel && prevStatus == model.RuleStatusRunning {
 		if err = s.validateTunnelSwitchTarget(req.TunnelID); err != nil {
 			return nil, err
 		}
@@ -197,10 +201,15 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		}
 	}
 
-	wasRunning := rule.Status == model.RuleStatusRunning
 	if wasRunning {
 		if err = s.stopCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("更新规则前停止失败: %v", err)
+			return nil, err
+		}
+		// stopCore 删不掉服务时只记日志、照样把状态写成 stopped：对“停止”来说残留交给看门狗清理即可，
+		// 对“编辑”不行 —— 旧服务会继续按旧端口/旧目标转发，看门狗还会把它当成新配置已经生效
+		if err = s.ensureRuleServicesRemoved(rule); err != nil {
+			_ = s.ruleRepo.UpdateStatus(id, prevStatus)
 			return nil, err
 		}
 		rule.Status = model.RuleStatusStopped
@@ -231,19 +240,29 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 		if err = s.startCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("更新规则后重新启动失败: %v", err)
 
-			rollbackRule := prevRule
-			rollbackRule.Status = model.RuleStatusStopped
-			if rbErr := s.ruleRepo.UpdateConfig(&rollbackRule); rbErr != nil {
-				logger.Errorf("更新失败后回滚规则配置失败: %v", rbErr)
+			if prevStatus == model.RuleStatusError {
+				// 原本就在等待恢复的规则：保留新配置并维持 error，交给看门狗继续重试
+				_ = s.ruleRepo.UpdateStatus(id, model.RuleStatusError)
+				rule.Status = model.RuleStatusError
+			} else {
+				rollbackRule := prevRule
+				rollbackRule.Status = model.RuleStatusStopped
+				if rbErr := s.ruleRepo.UpdateConfig(&rollbackRule); rbErr != nil {
+					logger.Errorf("更新失败后回滚规则配置失败: %v", rbErr)
+					_ = s.ruleRepo.UpdateStatus(id, model.RuleStatusError)
+					return nil, err
+				}
+				if restartErr := s.startCore(id, userID, username, ip, userAgent); restartErr != nil {
+					logger.Errorf("更新失败后恢复旧规则启动失败: %v", restartErr)
+					// 用户只是想改配置，不是想停掉它：记为 error 保留“应当运行”的意图，
+					// 否则看门狗会按 stopped 把它当残留清掉
+					_ = s.ruleRepo.UpdateStatus(id, model.RuleStatusError)
+				}
 				return nil, err
 			}
-			if restartErr := s.startCore(id, userID, username, ip, userAgent); restartErr != nil {
-				logger.Errorf("更新失败后恢复旧规则启动失败: %v", restartErr)
-				return nil, err
-			}
-			return nil, err
+		} else {
+			rule.Status = model.RuleStatusRunning
 		}
-		rule.Status = model.RuleStatusRunning
 	}
 
 	s.logService.Record(
@@ -292,7 +311,7 @@ func (s *RuleService) Delete(id uint, userID uint, username string, ip, userAgen
 		return err
 	}
 
-	if rule.Status == model.RuleStatusRunning {
+	if rule.Status.WantsRunning() {
 		if err = s.stopCore(id, userID, username, ip, userAgent); err != nil {
 			logger.Warnf("停止规则失败: %v", err)
 		}
@@ -397,9 +416,15 @@ func (s *RuleService) startCore(id uint, userID uint, username string, ip, userA
 	}
 
 	if rule.Type == model.RuleTypeTunnel {
-		selectedTunnel, err := s.selectAvailableTunnel(rule)
-		if err != nil {
-			return err
+		candidates := s.availableTunnels(rule)
+		if len(candidates) == 0 {
+			return errors.ErrTunnelFailoverUnavailable
+		}
+		// 与故障转移一致：按优先级取第一条链路确实在入口节点上的隧道。
+		// 只看数据库会选中“运行中”但链路已丢的隧道，启动失败、还把规则挪了过去
+		selectedTunnel := s.firstRoutableTunnel(candidates)
+		if selectedTunnel == nil {
+			return errors.ErrTunnelChainNotFound
 		}
 		if rule.TunnelID == nil || *rule.TunnelID != selectedTunnel.ID {
 			_ = s.ruleRepo.UpdateFields(&model.GostRule{}, rule.ID, map[string]any{"tunnel_id": selectedTunnel.ID})
@@ -483,11 +508,14 @@ func (s *RuleService) failoverOne(ruleID uint) {
 		return
 	}
 
-	selectedTunnel, err := s.selectAvailableTunnel(rule)
-	if err != nil {
+	candidates := s.availableTunnels(rule)
+	if len(candidates) == 0 || (rule.TunnelID != nil && *rule.TunnelID == candidates[0].ID) {
 		return
 	}
-	if rule.TunnelID != nil && *rule.TunnelID == selectedTunnel.ID {
+	// 要切换了：先确认目标隧道的链路确实在入口节点上。否则拆掉正常工作的服务之后，
+	// 新服务会挂在不存在的链路上 —— 链路缺失时 GOST 会让流量绕过隧道直连目标
+	selectedTunnel := s.firstRoutableTunnel(candidates)
+	if selectedTunnel == nil || (rule.TunnelID != nil && *rule.TunnelID == selectedTunnel.ID) {
 		return
 	}
 
@@ -503,6 +531,9 @@ func (s *RuleService) failoverOne(ruleID uint) {
 	_ = s.ruleRepo.UpdateFields(&model.GostRule{}, rule.ID, map[string]any{"tunnel_id": selectedTunnel.ID})
 	if err := s.startCore(rule.ID, 0, "system", "", ""); err != nil {
 		logger.Warnf("[Failover] 规则 %d (%s) 切换后启动失败: %v", rule.ID, rule.Name, err)
+		// stopCore 已把状态写成 stopped；这里改回 error，保留“应当运行”的意图，
+		// 交给看门狗继续重试，而不是让一次切换失败把规则永久停掉。
+		_ = s.ruleRepo.UpdateStatus(rule.ID, model.RuleStatusError)
 	}
 }
 
@@ -531,6 +562,11 @@ func (s *RuleService) startTunnelRule(rule *model.GostRule, client *gost.Client,
 		return errors.ErrTunnelChainNotFound
 	}
 
+	// 链不在入口节点上时，GOST 会让流量直连目标、绕过隧道，宁可启动失败也不能下发
+	if ok, err := client.ChainExists(tunnel.ChainID); err != nil || !ok {
+		return errors.ErrTunnelChainNotFound
+	}
+
 	return s.buildAndStartService(client, rule, serviceName, tunnel.ChainID)
 }
 
@@ -548,7 +584,8 @@ func (s *RuleService) stopCore(id uint, userID uint, username string, ip, userAg
 		return err
 	}
 
-	if rule.Status != model.RuleStatusRunning {
+	// error 也要能停：它表示看门狗仍在重试恢复，用户点“停止”就是要终止重试并清理节点上的残留
+	if !rule.Status.WantsRunning() {
 		return nil
 	}
 
@@ -560,6 +597,7 @@ func (s *RuleService) stopCore(id uint, userID uint, username string, ip, userAg
 	}
 
 	if node.Status == model.NodeStatusOffline {
+		// 节点离线时删不掉服务；它重新上线后，看门狗会按 stopped 清理残留
 		_ = s.ruleRepo.UpdateStatus(id, model.RuleStatusStopped)
 		return nil
 	}
@@ -680,6 +718,35 @@ func (s *RuleService) normalizeBackupTunnelIDs(primaryID *uint, backupIDs []uint
 }
 
 func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTunnel, error) {
+	tunnels := s.availableTunnels(rule)
+	if len(tunnels) == 0 {
+		return nil, errors.ErrTunnelFailoverUnavailable
+	}
+	return tunnels[0], nil
+}
+
+// firstRoutableTunnel 返回候选中第一条链路确实存在于入口节点上的隧道（候选共用同一入口节点）。
+// 数据库里“运行中”不代表节点上的链路还在（例如入口节点刚重启、看门狗尚未补建），
+// 而规则挂到不存在的链路上时，GOST 会让流量绕过隧道直连目标。
+func (s *RuleService) firstRoutableTunnel(candidates []*model.GostTunnel) *model.GostTunnel {
+	if len(candidates) == 0 {
+		return nil
+	}
+	node, err := s.nodeRepo.FindByID(candidates[0].EntryNodeID)
+	if err != nil {
+		return nil
+	}
+	client := utils.GetGostClient(node)
+	for _, tunnel := range candidates {
+		if ok, err := client.ChainExists(tunnel.ChainID); err == nil && ok {
+			return tunnel
+		}
+	}
+	return nil
+}
+
+// availableTunnels 按优先级返回规则当前可用的全部隧道。
+func (s *RuleService) availableTunnels(rule *model.GostRule) []*model.GostTunnel {
 	// 优先级：① 用户指定的主链路 → ② 当前生效链路（若与主链路不同）→ ③ 备选列表
 	// 这样当主链路恢复时，下次巡检会自动切回主链路。
 	seen := make(map[uint]bool)
@@ -710,6 +777,7 @@ func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTu
 		}
 	}
 
+	var usable []*model.GostTunnel
 	for _, tunnelID := range candidates {
 		tunnel, err := s.tunnelRepo.FindByID(*tunnelID)
 		if err != nil {
@@ -719,11 +787,10 @@ func (s *RuleService) selectAvailableTunnel(rule *model.GostRule) (*model.GostTu
 			continue
 		}
 		if s.isTunnelUsable(tunnel) {
-			return tunnel, nil
+			usable = append(usable, tunnel)
 		}
 	}
-
-	return nil, errors.ErrTunnelFailoverUnavailable
+	return usable
 }
 
 func (s *RuleService) isTunnelUsable(tunnel *model.GostTunnel) bool {
@@ -768,37 +835,49 @@ func (s *RuleService) setupRuleObserver(client *gost.Client, rule *model.GostRul
 	return nil
 }
 
-// buildAndStartService builds and starts a Gost service.
-func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.GostRule, serviceName string, chainID string) error {
+// buildRuleServices 构建规则在入口节点上的 gost 服务定义（TCP+UDP 两个子服务），
+// 并挂上隧道链路与流量观察器。启动与看门狗恢复共用，保证两条路径下发的配置一致。
+func (s *RuleService) buildRuleServices(client *gost.Client, rule *model.GostRule, serviceName string, chainID string) ([]*gost.ServiceConfig, error) {
 	targets := rule.Targets
 	strategy := rule.Strategy
 	if strategy == "" || len(targets) == 1 {
 		strategy = "round"
 	}
 
+	services := gost.BuildFullForwardService(serviceName, rule.ListenPort, targets, strategy)
+	for _, svc := range services {
+		if chainID != "" {
+			svc.Handler.Chain = chainID
+		}
+		if err := s.setupRuleObserver(client, rule, svc); err != nil {
+			return nil, err
+		}
+	}
+	return services, nil
+}
+
+// buildAndStartService builds and starts a Gost service.
+func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.GostRule, serviceName string, chainID string) error {
 	// 先清理同名旧服务，确保启动幂等：
 	// gost 的 CreateService 对已存在的同名服务会直接跳过，
 	// 若不先删除，切换隧道时会沿用旧链路（切换无效），
 	// 失败回滚时也会因端口/服务残留而无法重新拉起。
-	s.deleteRuleServices(client, serviceName)
+	// 删不掉就必须中止：继续往下走，创建会因旧服务还在而被跳过，
+	// 旧服务连同它引用的旧链路原样保留，切换看似成功实则没有生效。
+	if err := s.deleteRuleServices(client, serviceName); err != nil {
+		return errors.WithDetail(errors.ErrRuleStartFailed, "清理旧服务失败: "+err.Error())
+	}
 
-	services := gost.BuildFullForwardService(serviceName, rule.ListenPort, targets, strategy)
-
-	if chainID != "" {
-		for _, svc := range services {
-			svc.Handler.Chain = chainID
-		}
+	services, err := s.buildRuleServices(client, rule, serviceName, chainID)
+	if err != nil {
+		_ = client.SaveConfig()
+		return err
 	}
 
 	for _, svc := range services {
-		if err := s.setupRuleObserver(client, rule, svc); err != nil {
-			s.deleteRuleServices(client, serviceName)
-			_ = client.SaveConfig()
-			return err
-		}
 		if err := client.CreateService(svc); err != nil {
 			// 清理本次可能已部分创建的服务，避免端口残留导致后续启动/回滚失败
-			s.deleteRuleServices(client, serviceName)
+			_ = s.deleteRuleServices(client, serviceName)
 			_ = client.SaveConfig()
 			_ = s.ruleRepo.UpdateStatus(rule.ID, model.RuleStatusError)
 			return errors.ErrRuleStartFailed
@@ -812,15 +891,105 @@ func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.Gost
 	return nil
 }
 
-// deleteRuleServices 删除某条规则在节点上的全部 gost 服务（含 -tcp/-udp 变体）。
-func (s *RuleService) deleteRuleServices(client *gost.Client, serviceName string) {
+// restoreRuleServices 供看门狗使用：只重建缺失、已失败或挂错链路的子服务，健康的子服务保持不动。
+//
+// 不能复用 buildAndStartService 的“先全删再全建”：例如 UDP 子服务因端口被占而反复失败时，
+// 每次重试都连带重建 TCP 子服务，会周期性地打断 TCP 上的存量连接。
+// 各子服务独立处理，一个失败不影响另一个；返回本次实际重建的服务名与遇到的第一个错误。
+func (s *RuleService) restoreRuleServices(client *gost.Client, rule *model.GostRule, chainID string, snap *nodeSnapshot) ([]string, error) {
+	serviceName := fmt.Sprintf("rule-%d", rule.ID)
+	var (
+		restored []string
+		firstErr error
+	)
+	// 引用了不存在 chain 的子服务正在绕过隧道直连目标，先删掉，不能让它等后面构建配置
+	// （构建要下发观察器，节点抖动或未配置面板地址时会失败）
+	removed := make(map[string]bool)
+	for _, name := range []string{serviceName, serviceName + "-tcp", serviceName + "-udp"} {
+		if !snap.leaks(name) {
+			continue
+		}
+		if err := client.DeleteService(name); err != nil {
+			firstErr = err
+			continue
+		}
+		removed[name] = true
+	}
+
+	services, err := s.buildRuleServices(client, rule, serviceName, chainID)
+	if err != nil {
+		if len(removed) > 0 {
+			_ = client.SaveConfig()
+		}
+		return nil, err
+	}
+
+	// 不带协议后缀的同名服务不属于现在的 TCP+UDP 结构，会和子服务抢端口，先删掉
+	if _, ok := snap.services[serviceName]; ok && !removed[serviceName] {
+		if err = client.DeleteService(serviceName); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	for _, svc := range services {
+		if snap.serviceHealthy(svc.Name, chainID) {
+			continue
+		}
+		if _, exists := snap.services[svc.Name]; exists && !removed[svc.Name] {
+			// 删不掉就不能再创建：创建会因旧服务还在而被跳过，旧配置原样保留
+			if err = client.DeleteService(svc.Name); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+		}
+		if err = client.CreateService(svc); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		restored = append(restored, svc.Name)
+	}
+
+	if len(restored) > 0 {
+		_ = client.SaveConfig()
+		_ = s.ruleRepo.UpdateServiceID(rule.ID, serviceName)
+	}
+	return restored, firstErr
+}
+
+// ensureRuleServicesRemoved 确认规则在入口节点上的服务都已删除；仍存在或无法确认时返回错误
+func (s *RuleService) ensureRuleServicesRemoved(rule *model.GostRule) error {
+	node, err := s.nodeRepo.FindByID(s.getEntryNodeID(rule))
+	if err != nil {
+		return errors.ErrNodeNotFound
+	}
+	client := utils.GetGostClient(node)
+	base := fmt.Sprintf("rule-%d", rule.ID)
+	for _, name := range []string{base, base + "-tcp", base + "-udp"} {
+		exists, err := client.ServiceExists(name)
+		if err != nil || exists {
+			return errors.WithDetail(errors.ErrOperationFailed, "节点上的旧服务未能删除，请稍后重试")
+		}
+	}
+	return nil
+}
+
+// deleteRuleServices 删除某条规则在节点上的全部 gost 服务（含 -tcp/-udp 变体），返回遇到的第一个错误。
+func (s *RuleService) deleteRuleServices(client *gost.Client, serviceName string) error {
 	names := []string{serviceName}
 	if !strings.HasSuffix(serviceName, "-tcp") && !strings.HasSuffix(serviceName, "-udp") {
 		names = append(names, serviceName+"-tcp", serviceName+"-udp")
 	}
+	var firstErr error
 	for _, name := range names {
 		if err := client.DeleteService(name); err != nil {
 			logger.Warnf("清理 Gost 服务 %s 失败: %v", name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }

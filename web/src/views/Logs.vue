@@ -26,9 +26,12 @@
           <el-option label="删除" value="delete" />
           <el-option label="启动" value="start" />
           <el-option label="停止" value="stop" />
+          <el-option label="自动恢复" value="recover" />
+          <el-option label="清理残留" value="cleanup" />
         </el-select>
         <el-select v-model="searchResourceType" placeholder="资源类型" clearable style="width: 120px" @change="handleSearch">
           <el-option label="节点" value="node" />
+          <el-option label="规则" value="rule" />
           <el-option label="转发" value="forward" />
           <el-option label="隧道" value="tunnel" />
         </el-select>
@@ -111,7 +114,8 @@ const getActionType = (action) => {
     login: 'warning', login_failed: 'danger', logout: 'info',
     change_password: 'warning', view_secret: 'danger',
     create: 'primary', update: 'warning', delete: 'danger', start: 'success', stop: 'info',
-    system_update: 'danger', system_rollback: 'danger', system_restart: 'warning'
+    system_update: 'danger', system_rollback: 'danger', system_restart: 'warning',
+    recover: 'success', cleanup: 'info'
   }
   return map[action] || ''
 }
@@ -121,7 +125,8 @@ const getActionText = (action) => {
     login: '登录', login_failed: '登录失败', logout: '登出',
     change_password: '改密', view_secret: '查看凭据',
     create: '创建', update: '更新', delete: '删除', start: '启动', stop: '停止',
-    system_update: '在线更新', system_rollback: '版本回滚', system_restart: '重启服务'
+    system_update: '在线更新', system_rollback: '版本回滚', system_restart: '重启服务',
+    recover: '自动恢复', cleanup: '清理残留'
   }
   return map[action] || action
 }

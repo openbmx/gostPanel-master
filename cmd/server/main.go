@@ -14,6 +14,7 @@ import (
 
 	"gost-panel/internal/config"
 	"gost-panel/internal/model"
+	"gost-panel/internal/repository"
 	"gost-panel/internal/router"
 	"gost-panel/internal/service"
 	"gost-panel/internal/utils"
@@ -262,6 +263,14 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SystemConfig{},
 	); err != nil {
 		return err
+	}
+
+	// 2. 修复历史数据：旧版本编辑隧道换出口节点时，exit_node_id 会被回写成编辑前的节点
+	//    （见 TunnelRepository.Update）。失败只告警、不阻止启动，下次启动会再试。
+	if fixed, err := repository.NewTunnelRepository(db).SyncExitNodeWithLastHop(); err != nil {
+		logger.Warnf("校正隧道出口节点失败: %v", err)
+	} else if fixed > 0 {
+		logger.Infof("已按跳点校正 %d 条隧道的出口节点记录", fixed)
 	}
 
 	return nil

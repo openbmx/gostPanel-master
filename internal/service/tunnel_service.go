@@ -121,6 +121,11 @@ func (s *TunnelService) Update(id uint, req *dto.UpdateTunnelReq, userID uint, u
 		ip,
 		userAgent)
 
+	// tunnel 上预加载的 ExitNode 仍是编辑前的出口节点；重新读取，
+	// 否则接口返回的 exit_node_id 是新节点、exit_node 却是旧节点
+	if fresh, err := s.tunnelRepo.FindByID(id); err == nil {
+		tunnel = fresh
+	}
 	return tunnel, nil
 }
 

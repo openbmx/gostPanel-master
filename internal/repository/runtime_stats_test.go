@@ -249,6 +249,64 @@ func TestTunnelRepositoryFindByNodeIDIncludesExplicitHopNodes(t *testing.T) {
 	}
 }
 
+// TestTunnelRepositorySyncExitNodeWithLastHop 修复旧版本编辑隧道时被回写坏的 exit_node_id
+func TestTunnelRepositorySyncExitNodeWithLastHop(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewTunnelRepository(db)
+	entry := createRepositoryTestNode(t, db, "entry")
+	oldExit := createRepositoryTestNode(t, db, "old-exit")
+	newExit := createRepositoryTestNode(t, db, "new-exit")
+	middle := createRepositoryTestNode(t, db, "middle")
+
+	mk := func(name string, exitID uint, hops []model.TunnelHop) *model.GostTunnel {
+		t.Helper()
+		tunnel := &model.GostTunnel{
+			Name: name, EntryNodeID: entry.ID, ExitNodeID: exitID, Protocol: "ws", RelayPort: 8443, Hops: hops,
+			InputBytes: 123, TotalBytes: 456,
+		}
+		if err := db.Create(tunnel).Error; err != nil {
+			t.Fatalf("create tunnel failed: %v", err)
+		}
+		return tunnel
+	}
+	// 被写坏的：hops 已换到新出口，exit_node_id 还是旧出口
+	broken := mk("broken", oldExit.ID, []model.TunnelHop{
+		{NodeID: middle.ID, Protocol: "ws", RelayPort: 9001},
+		{NodeID: newExit.ID, Protocol: "ws", RelayPort: 9002},
+	})
+	// 一致的、以及没有 hops 的旧版单跳隧道都不应被改动
+	consistent := mk("consistent", newExit.ID, []model.TunnelHop{{NodeID: newExit.ID, Protocol: "ws", RelayPort: 9003}})
+	legacy := mk("legacy", oldExit.ID, nil)
+
+	fixed, err := repo.SyncExitNodeWithLastHop()
+	if err != nil || fixed != 1 {
+		t.Fatalf("应只校正 1 条，实际 fixed=%d err=%v", fixed, err)
+	}
+
+	load := func(id uint) model.GostTunnel {
+		t.Helper()
+		var tunnel model.GostTunnel
+		if err := db.First(&tunnel, id).Error; err != nil {
+			t.Fatalf("load tunnel failed: %v", err)
+		}
+		return tunnel
+	}
+	if got := load(broken.ID); got.ExitNodeID != newExit.ID || got.InputBytes != 123 || got.TotalBytes != 456 {
+		t.Errorf("写坏的记录应改为新出口且不动流量统计，实际 exit=%d in=%d total=%d", got.ExitNodeID, got.InputBytes, got.TotalBytes)
+	}
+	if got := load(consistent.ID); got.ExitNodeID != newExit.ID {
+		t.Errorf("一致的记录不应被改动，实际 exit=%d", got.ExitNodeID)
+	}
+	if got := load(legacy.ID); got.ExitNodeID != oldExit.ID {
+		t.Errorf("旧版单跳隧道不应被改动，实际 exit=%d", got.ExitNodeID)
+	}
+
+	// 幂等：再跑一次不应有任何改动
+	if fixed, err = repo.SyncExitNodeWithLastHop(); err != nil || fixed != 0 {
+		t.Errorf("第二次运行应无改动，实际 fixed=%d err=%v", fixed, err)
+	}
+}
+
 func TestTunnelRepositoryStopByNodeIDIncludesExplicitHopNodes(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	repo := NewTunnelRepository(db)

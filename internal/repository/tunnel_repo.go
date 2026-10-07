@@ -5,6 +5,7 @@ import (
 	"gost-panel/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TunnelRepository 隧道仓库
@@ -25,8 +26,43 @@ func (r *TunnelRepository) Create(tunnel *model.GostTunnel) error {
 }
 
 // Update 更新隧道
+// 注意：必须 Omit 关联，否则 GORM 会因 belongs-to 关联（EntryNode/ExitNode）的自动保存，
+// 用预加载的旧关联对象主键反写回外键（entry_node_id/exit_node_id），导致修改 hops 切换出口节点后
+// exit_node_id 仍指向旧节点：流量统计记到旧出口节点，旧出口节点也因“仍被使用”而无法删除。
 func (r *TunnelRepository) Update(tunnel *model.GostTunnel) error {
-	return r.DB.Save(tunnel).Error
+	return r.DB.Omit(clause.Associations).Save(tunnel).Error
+}
+
+// SyncExitNodeWithLastHop 修复历史数据：让 exit_node_id 与 hops 的最后一跳一致，返回校正的条数。
+//
+// Update 修复之前，编辑隧道换出口节点会被关联回写成旧节点（见上）。新的编辑不会再出错，
+// 但已经写坏的记录不会自己恢复：列表里的“出口”、流量统计的归属、删除旧节点时的占用检查
+// 都还在用错误的值。启动时按 hops 校正一次，结果幂等。
+func (r *TunnelRepository) SyncExitNodeWithLastHop() (int, error) {
+	var tunnels []model.GostTunnel
+	if err := r.DB.Find(&tunnels).Error; err != nil {
+		return 0, err
+	}
+	fixed := 0
+	for _, t := range tunnels {
+		if len(t.Hops) == 0 {
+			continue // 旧版单跳隧道没有 hops，出口就是 exit_node_id 本身
+		}
+		hops := t.EffectiveHops()
+		if len(hops) == 0 {
+			continue
+		}
+		last := hops[len(hops)-1].NodeID
+		if t.ExitNodeID == last {
+			continue
+		}
+		// 只改这一列，不碰流量统计等其它字段，也不刷新 updated_at
+		if err := r.DB.Model(&model.GostTunnel{}).Where("id = ?", t.ID).UpdateColumn("exit_node_id", last).Error; err != nil {
+			return fixed, err
+		}
+		fixed++
+	}
+	return fixed, nil
 }
 
 // Delete 删除隧道

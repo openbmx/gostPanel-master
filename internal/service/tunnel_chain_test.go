@@ -197,6 +197,52 @@ func TestTunnelServiceCreateRejectsRepeatedHopNodes(t *testing.T) {
 	}
 }
 
+func TestTunnelServiceUpdatePersistsNewLastHopAsExitNode(t *testing.T) {
+	db := newTunnelChainServiceTestDB(t)
+	svc := NewTunnelService(db)
+	entry := createTunnelChainNode(t, db, "entry")
+	exitA := createTunnelChainNode(t, db, "exit-a")
+	exitB := createTunnelChainNode(t, db, "exit-b")
+
+	tunnel, err := svc.Create(&dto.CreateTunnelReq{
+		Name:        "switch-exit",
+		EntryNodeID: entry.ID,
+		Hops: []dto.TunnelHopReq{
+			{NodeID: exitA.ID, Protocol: "ws", RelayPort: 9001},
+		},
+	}, 1, "admin", "127.0.0.1", "test")
+	if err != nil {
+		t.Fatalf("create tunnel failed: %v", err)
+	}
+
+	// Update 加载隧道时预加载了 EntryNode/ExitNode。保存时若不 Omit 关联，
+	// GORM 会用预加载的旧 ExitNode 主键反写 exit_node_id，出口节点切换不会生效。
+	updated, err := svc.Update(tunnel.ID, &dto.UpdateTunnelReq{
+		Name: "switch-exit",
+		Hops: []dto.TunnelHopReq{
+			{NodeID: exitB.ID, Protocol: "tls", RelayPort: 9002},
+		},
+	}, 1, "admin", "127.0.0.1", "test")
+	if err != nil {
+		t.Fatalf("update tunnel failed: %v", err)
+	}
+	// 接口返回值里的出口节点对象也要是新节点，不能沿用编辑前预加载的旧对象
+	if updated.ExitNodeID != exitB.ID || updated.ExitNode == nil || updated.ExitNode.ID != exitB.ID {
+		t.Fatalf("returned tunnel should carry the new exit node %d, got exit_node_id=%d exit_node=%+v", exitB.ID, updated.ExitNodeID, updated.ExitNode)
+	}
+
+	var reloaded model.GostTunnel
+	if err = db.First(&reloaded, tunnel.ID).Error; err != nil {
+		t.Fatalf("reload tunnel failed: %v", err)
+	}
+	if reloaded.ExitNodeID != exitB.ID {
+		t.Fatalf("exit_node_id should follow the new last hop %d, got %d", exitB.ID, reloaded.ExitNodeID)
+	}
+	if len(reloaded.Hops) != 1 || reloaded.Hops[0].NodeID != exitB.ID || reloaded.Hops[0].Protocol != "tls" || reloaded.Hops[0].RelayPort != 9002 {
+		t.Fatalf("stored hops should be replaced by the new last hop, got %+v", reloaded.Hops)
+	}
+}
+
 func TestTunnelServiceListFiltersByExplicitHopNodeBeforePagination(t *testing.T) {
 	db := newTunnelChainServiceTestDB(t)
 	svc := NewTunnelService(db)

@@ -25,7 +25,8 @@ RAW_BASE="${RAW_BASE:-https://raw.githubusercontent.com/${REPO}/main/scripts}"
 GH_PROXY="${GH_PROXY:-}"
 
 # 服务端路径
-PANEL_BIN="/usr/local/bin/gost-panel"
+PANEL_BIN="/opt/gost-panel/gost-panel"
+PANEL_LEGACY_BIN="/usr/local/bin/gost-panel"   # 早期版本的安装位置
 PANEL_CONFIG="/etc/gost-panel/config.yaml"
 PANEL_DATA="/var/lib/gost-panel"
 PANEL_SERVICE="gost-panel"
@@ -137,6 +138,35 @@ panel_port() {
     echo "${port:-39100}"
 }
 
+# 服务端当前版本。
+#
+# 优先询问正在运行的服务 —— 那才是真正生效的版本；服务未运行时，
+# 才退回读取 systemd 单元 ExecStart 指向的二进制。
+# 不能写死读某个路径：早期版本装在 /usr/local/bin，新版本在 /opt/gost-panel，
+# 早期升级脚本的缺陷还会让两处同时存在文件，读错位置就会显示错版本。
+panel_version() {
+    local port body ver bin scheme b
+    port=$(panel_port)
+    # 开启 TLS 的面板在同一端口上只接受 HTTPS；本机查询不校验证书
+    for scheme in http https; do
+        body=$(curl -fsSk --max-time 3 "${scheme}://127.0.0.1:${port}/api/v1/health" 2>/dev/null) && break
+    done
+    ver=$(echo "$body" | grep -o '"version": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/')
+    if [ -n "$ver" ]; then
+        echo "$ver"
+        return
+    fi
+
+    bin=$(grep -E '^ExecStart=' "/etc/systemd/system/${PANEL_SERVICE}.service" 2>/dev/null | tail -n1 | cut -d= -f2- | awk '{print $1}')
+    for b in "$bin" "$PANEL_BIN" "$PANEL_LEGACY_BIN"; do
+        if [ -n "$b" ] && [ -x "$b" ]; then
+            "$b" --version 2>/dev/null | awk '{print $NF}'
+            return
+        fi
+    done
+    echo "未知"
+}
+
 # 公网 IP
 public_ip() {
     curl -s -4 --max-time 5 https://api.ipify.org 2>/dev/null \
@@ -195,7 +225,7 @@ panel_info() {
     local port ip ver
     port=$(panel_port)
     ip=$(public_ip)
-    ver=$("$PANEL_BIN" --version 2>/dev/null || echo "未知")
+    ver=$(panel_version)
     echo -e "  状态:     $(status_badge "$PANEL_SERVICE")"
     echo -e "  版本:     ${BLUE}${ver}${PLAIN}"
     echo -e "  访问地址: ${BLUE}http://${ip}:${port}${PLAIN}"

@@ -7,7 +7,9 @@ COPY web/ .
 RUN npm run build
 
 # 后端构建阶段
-FROM golang:1.23-alpine AS backend-builder
+# 版本须与 go.mod 的 toolchain 一致：官方镜像设置了 GOTOOLCHAIN=local，
+# 不会按 go.mod 自动切换工具链，镜像里的 Go 就是最终编译二进制所用的版本。
+FROM golang:1.26.9-alpine AS backend-builder
 WORKDIR /app
 
 # 复制依赖文件

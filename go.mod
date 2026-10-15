@@ -1,13 +1,15 @@
 module gost-panel
 
-go 1.23.0
+// 最低语言版本由依赖决定：修复 HTTP/2 漏洞的 golang.org/x/net v0.60.0 要求 go 1.26.0。
+go 1.26.0
 
 // 构建工具链固定在修复了标准库漏洞的版本。
-// go1.24.11 的 net/url、crypto/tls、net/http、encoding/xml、encoding/asn1
-// 均有已知漏洞（GO-2026-6218 / 6090 / 6089 / 6088 / 5972 / 5856），
-// 全部在 go1.25.13 修复。CI 的 setup-go 按本行解析版本，
+// go1.25.13 的 net/http、net/textproto、crypto/tls 均有已知漏洞
+// （GO-2026-6617 / 6613 / 6612 / 6611 / 6610 / 6608 / 6607 / 6605 / 6603），
+// 全部在 go1.26.9 修复（go1.25 已停止维护，不会再有 1.25.x 修复）。
+// CI 的 setup-go 按本行解析版本，Dockerfile 的构建镜像须与之一致；
 // 升级前请先跑 govulncheck 确认没有新增项。
-toolchain go1.25.13
+toolchain go1.26.9
 
 require (
 	github.com/gin-contrib/cors v1.7.6
@@ -16,7 +18,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/spf13/viper v1.18.2
 	go.uber.org/zap v1.26.0
-	golang.org/x/crypto v0.39.0
+	golang.org/x/crypto v0.57.0
 	gorm.io/gorm v1.25.7
 )
 
@@ -59,9 +61,9 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.18.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sys v0.33.0 // indirect
-	golang.org/x/text v0.26.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

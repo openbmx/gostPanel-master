@@ -87,6 +87,8 @@ var (
 	ErrTunnelFailoverUnavailable = New(10110, "当前隧道及备选隧道均不可用", http.StatusBadRequest)
 	// ErrTunnelEntryMismatch 备选隧道入口节点与主隧道不一致
 	ErrTunnelEntryMismatch = New(10111, "备选隧道必须与主隧道使用相同入口节点", http.StatusBadRequest)
+	// ErrRuleUDPFakeTCP UDP 伪TCP直通配置不可用
+	ErrRuleUDPFakeTCP = New(10112, "UDP 伪TCP直通配置不可用", http.StatusBadRequest)
 )
 
 // ==================== 隧道相关错误 (102xx) ====================

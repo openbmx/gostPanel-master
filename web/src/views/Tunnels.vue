@@ -157,7 +157,9 @@
             <el-button type="primary" link :icon="Plus" @click="addHop">添加跳点</el-button>
           </div>
           <div class="form-hint">最后一个跳点就是出口节点。每个跳点会在对应节点上创建 Relay 服务。</div>
-          <div class="form-hint">QUIC、KCP 基于 UDP，只能用于第 1 跳。</div>
+          <div class="form-hint">
+            QUIC、KCP 只能用于第 1 跳。游戏的 UDP 流量可以在规则里开启「UDP 伪TCP直通」：不经过隧道的 relay，每个包伪装成一个 TCP 报文直达出口，不重传。
+          </div>
         </el-form-item>
 
         <el-form-item label="备注" prop="remark">

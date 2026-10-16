@@ -49,6 +49,11 @@ type GostRule struct {
 	Status    RuleStatus `gorm:"size:20;default:stopped" json:"status"`    // 状态
 	ServiceID string     `gorm:"size:100" json:"service_id"`               // Gost 服务 ID
 
+	// UDP 伪TCP直通（仅隧道转发）：UDP 不走隧道的 relay，由入口节点把每个 UDP 包伪装成一个 TCP 报文，
+	// 直接发到当前隧道出口节点的 UDPFakeTCPPort，出口节点再转发给目标，不重传。TCP 仍走隧道。
+	UDPFakeTCP     bool `gorm:"default:false" json:"udp_fake_tcp"`
+	UDPFakeTCPPort int  `gorm:"default:0" json:"udp_fake_tcp_port"` // 出口节点上接收伪 TCP 的端口，0 表示同监听端口
+
 	// 流量监控配置
 	ObserverID string `gorm:"size:100" json:"observer_id"` // 观察器 ID
 

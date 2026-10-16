@@ -96,6 +96,12 @@ func (s *RuleService) Create(req *dto.CreateRuleReq, userID uint, username strin
 		return nil, errors.ErrRulePortExists
 	}
 
+	udpFakeTCP, udpFakeTCPPort, err := s.normalizeUDPFakeTCP(model.RuleType(req.Type), req.UDPFakeTCP, req.UDPFakeTCPPort,
+		req.ListenPort, ruleTunnelIDs(req.TunnelID, req.BackupTunnelIDs))
+	if err != nil {
+		return nil, err
+	}
+
 	rule := &model.GostRule{
 		NodeID:          req.NodeID,
 		TunnelID:        req.TunnelID,
@@ -107,6 +113,8 @@ func (s *RuleService) Create(req *dto.CreateRuleReq, userID uint, username strin
 		Targets:         req.Targets,
 		Strategy:        req.Strategy,
 		EnableTLS:       req.EnableTLS,
+		UDPFakeTCP:      udpFakeTCP,
+		UDPFakeTCPPort:  udpFakeTCPPort,
 		Remark:          req.Remark,
 		Status:          model.RuleStatusStopped,
 	}
@@ -200,6 +208,11 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 			return nil, err
 		}
 	}
+	udpFakeTCP, udpFakeTCPPort, err := s.normalizeUDPFakeTCP(rule.Type, req.UDPFakeTCP, req.UDPFakeTCPPort,
+		req.ListenPort, ruleTunnelIDs(req.TunnelID, backupTunnelIDs))
+	if err != nil {
+		return nil, err
+	}
 
 	if wasRunning {
 		if err = s.stopCore(id, userID, username, ip, userAgent); err != nil {
@@ -220,6 +233,8 @@ func (s *RuleService) Update(id uint, req *dto.UpdateRuleReq, userID uint, usern
 	rule.Targets = req.Targets
 	rule.Strategy = req.Strategy
 	rule.EnableTLS = req.EnableTLS
+	rule.UDPFakeTCP = udpFakeTCP
+	rule.UDPFakeTCPPort = udpFakeTCPPort
 	rule.Remark = req.Remark
 
 	if rule.Type == model.RuleTypeTunnel {
@@ -621,6 +636,14 @@ func (s *RuleService) stopCore(id uint, userID uint, username string, ip, userAg
 			logger.Warnf("删除 Gost 服务失败: %v", err)
 		}
 	}
+	// 伪 TCP 链路只能在 UDP 子服务确实删掉之后再删，否则留下的子服务会直连目标；删不掉的交给看门狗
+	if deleteSucceeded && usesFakeTCP(rule) && rule.TunnelID != nil {
+		if tunnel, err := s.tunnelRepo.FindByID(*rule.TunnelID); err == nil {
+			if err = removeRuleFakeTCPPath(client, rule, tunnel, s.nodeRepo); err != nil {
+				logger.Warnf("删除规则 %s 的伪 TCP 链路失败: %v", rule.Name, err)
+			}
+		}
+	}
 
 	if err = client.SaveConfig(); err != nil {
 		deleteSucceeded = false
@@ -675,6 +698,15 @@ func (s *RuleService) ruleUsesRuntimeNode(rule *model.GostRule, nodeID uint) boo
 		return false
 	}
 	return rule.NodeID != nil && *rule.NodeID == nodeID
+}
+
+// ruleTunnelIDs 规则可能用到的全部隧道：主隧道与备选隧道
+func ruleTunnelIDs(primaryID *uint, backupIDs []uint) []uint {
+	ids := make([]uint, 0, len(backupIDs)+1)
+	if primaryID != nil && *primaryID > 0 {
+		ids = append(ids, *primaryID)
+	}
+	return append(ids, backupIDs...)
 }
 
 func (s *RuleService) normalizeBackupTunnelIDs(primaryID *uint, backupIDs []uint) ([]uint, error) {
@@ -849,6 +881,10 @@ func (s *RuleService) buildRuleServices(client *gost.Client, rule *model.GostRul
 		if chainID != "" {
 			svc.Handler.Chain = chainID
 		}
+		// UDP 伪TCP直通：UDP 子服务改挂规则自己的伪 TCP 链路，TCP 子服务仍走隧道
+		if usesFakeTCP(rule) && svc.Listener.Type == "udp" {
+			svc.Handler.Chain = ruleFakeTCPChainName(rule.ID)
+		}
 		if err := s.setupRuleObserver(client, rule, svc); err != nil {
 			return nil, err
 		}
@@ -866,6 +902,14 @@ func (s *RuleService) buildAndStartService(client *gost.Client, rule *model.Gost
 	// 旧服务连同它引用的旧链路原样保留，切换看似成功实则没有生效。
 	if err := s.deleteRuleServices(client, serviceName); err != nil {
 		return errors.WithDetail(errors.ErrRuleStartFailed, "清理旧服务失败: "+err.Error())
+	}
+	// UDP 伪TCP直通：出口节点上的伪 TCP 服务和入口节点上指向它的 chain 要先就位，UDP 子服务才能挂上去
+	if usesFakeTCP(rule) {
+		if err := s.deployFakeTCPPath(client, rule); err != nil {
+			_ = client.SaveConfig()
+			_ = s.ruleRepo.UpdateStatus(rule.ID, model.RuleStatusError)
+			return err
+		}
 	}
 
 	services, err := s.buildRuleServices(client, rule, serviceName, chainID)
@@ -931,7 +975,15 @@ func (s *RuleService) restoreRuleServices(client *gost.Client, rule *model.GostR
 		}
 	}
 	for _, svc := range services {
-		if snap.serviceHealthy(svc.Name, chainID) {
+		// 各子服务按自己应挂的 chain 判断：开了 UDP 伪TCP直通时，UDP 子服务挂的是规则自己的伪 TCP 链路
+		if snap.serviceHealthy(svc.Name, svc.Handler.Chain) {
+			continue
+		}
+		// 应挂的 chain 不在节点上（例如伪 TCP 链路这一轮没能补上）：下发出去就会绕过隧道直连目标，先不建
+		if c := svc.Handler.Chain; c != "" && !snap.chains[c] {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s 引用的 %s 不在节点上", svc.Name, c)
+			}
 			continue
 		}
 		if _, exists := snap.services[svc.Name]; exists && !removed[svc.Name] {

@@ -18,6 +18,9 @@ type CreateRuleReq struct {
 	Strategy  string   `json:"strategy" binding:"omitempty,oneof=round rand fifo hash"` // 负载均衡策略
 	EnableTLS bool     `json:"enable_tls"`                                              // 是否启用 TLS
 
+	UDPFakeTCP     bool `json:"udp_fake_tcp"`                                          // UDP 伪TCP直通（仅隧道转发）
+	UDPFakeTCPPort int  `json:"udp_fake_tcp_port" binding:"omitempty,min=1,max=65535"` // 出口节点上接收伪 TCP 的端口，默认同监听端口
+
 	Remark string `json:"remark"` // 备注
 }
 
@@ -31,6 +34,9 @@ type UpdateRuleReq struct {
 	Targets   []string `json:"targets"`                                                 // 多目标列表
 	Strategy  string   `json:"strategy" binding:"omitempty,oneof=round rand fifo hash"` // 负载均衡策略
 	EnableTLS bool     `json:"enable_tls"`                                              // 是否启用 TLS
+
+	UDPFakeTCP     bool `json:"udp_fake_tcp"`                                          // UDP 伪TCP直通（仅隧道转发）
+	UDPFakeTCPPort int  `json:"udp_fake_tcp_port" binding:"omitempty,min=1,max=65535"` // 出口节点上接收伪 TCP 的端口，默认同监听端口
 
 	Remark string `json:"remark"` // 备注
 }

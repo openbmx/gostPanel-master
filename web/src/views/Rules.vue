@@ -61,7 +61,18 @@
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="listen_port" label="监听端口" width="100" align="center" />
+        <el-table-column label="监听端口" width="150" align="center">
+          <template #default="{ row }">
+            {{ row.listen_port }}
+            <el-tooltip
+              v-if="row.type === 'tunnel' && row.udp_fake_tcp"
+              :content="`UDP 伪TCP直通，出口端口 ${row.udp_fake_tcp_port || row.listen_port}`"
+              placement="top"
+            >
+              <el-tag size="small" type="success" class="fake-tcp-tag">UDP伪TCP</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column label="目标地址" min-width="150" align="center" show-overflow-tooltip>
           <template #default="{ row }">
               <span v-if="row.targets && row.targets.length > 0">{{ row.targets[0] }}<span v-if="row.targets.length > 1"> (+{{ row.targets.length - 1 }})</span></span>
@@ -180,6 +191,24 @@
           <el-input-number v-model="form.listen_port" :min="1" :max="65535" controls-position="right" style="width: 100%" />
           <div class="form-hint">将自动创建 TCP 和 UDP 双协议转发服务</div>
         </el-form-item>
+        <el-form-item v-if="form.type === 'tunnel'" label="UDP 伪TCP">
+          <div class="fake-tcp-row">
+            <el-switch v-model="form.udp_fake_tcp" />
+            <el-input-number
+              v-if="form.udp_fake_tcp"
+              v-model="form.udp_fake_tcp_port"
+              :min="1"
+              :max="65535"
+              controls-position="right"
+              placeholder="出口端口，默认同监听端口"
+              style="width: 220px"
+            />
+          </div>
+          <div class="form-hint">
+            开启后 UDP 不走隧道的 relay：入口节点把每个 UDP 包伪装成一个 TCP 报文，直接发到隧道出口节点的这个端口，
+            由出口转发给目标，不重传、不加密，适合游戏。TCP 仍走隧道。出口节点要放行该端口的 TCP，gost 需以 root 运行。
+          </div>
+        </el-form-item>
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="负载均衡" prop="strategy">
@@ -265,6 +294,8 @@ const form = reactive({
   listen_port: 0,
   targetList: [{ address: '' }],
   strategy: 'round',
+  udp_fake_tcp: false,
+  udp_fake_tcp_port: null,
   remark: ''
 })
 
@@ -423,6 +454,8 @@ const openDialog = (row = null) => {
       listen_port: row.listen_port,
       targetList: tList.length > 0 ? tList : [{ address: '' }],
       strategy: row.strategy || 'round',
+      udp_fake_tcp: !!row.udp_fake_tcp,
+      udp_fake_tcp_port: row.udp_fake_tcp_port || null,
       remark: row.remark || ''
     })
   } else {
@@ -435,6 +468,8 @@ const openDialog = (row = null) => {
       listen_port: 8000,
       targetList: [{ address: '' }],
       strategy: 'round',
+      udp_fake_tcp: false,
+      udp_fake_tcp_port: null,
       remark: ''
     })
   }
@@ -456,6 +491,7 @@ const handleSubmit = async () => {
       // 准备提交数据
       const targets = form.targetList.map(item => item.address).filter(t => t.trim() !== '')
       
+      const fakeTCP = form.type === 'tunnel' && form.udp_fake_tcp
       const submitData = {
         type: form.type,
         node_id: form.type === 'forward' ? form.node_id : null,
@@ -465,6 +501,9 @@ const handleSubmit = async () => {
         listen_port: form.listen_port,
         targets: targets,
         strategy: form.strategy,
+        // 出口端口留空（0）表示沿用监听端口
+        udp_fake_tcp: fakeTCP,
+        udp_fake_tcp_port: fakeTCP ? (form.udp_fake_tcp_port || 0) : 0,
         remark: form.remark
       }
       
@@ -560,6 +599,8 @@ const handleTypeChange = (val) => {
   if (val === 'forward') {
     form.tunnel_id = null
     form.backup_tunnel_ids = []
+    form.udp_fake_tcp = false
+    form.udp_fake_tcp_port = null
   } else {
     form.node_id = ''
   }
@@ -608,6 +649,16 @@ const handleTypeChange = (val) => {
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: middle;
+}
+
+.fake-tcp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fake-tcp-tag {
+  margin-left: 6px;
 }
 
 .form-hint {

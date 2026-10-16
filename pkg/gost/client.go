@@ -518,6 +518,19 @@ func BuildUDPForwardService(name string, listenPort int, targets []string, strat
 	}
 }
 
+// BuildFakeTCPForwardService 构建伪 TCP 承载的 UDP 转发服务：监听伪造的 TCP 报文（ftcp，基于 tcpraw，
+// 节点需以 root 运行），每个报文按一个 UDP 包转发给目标，不重传。与 forward 连接器 + ftcp 拨号器的链路配对使用。
+func BuildFakeTCPForwardService(name string, listenPort int, targets []string, strategy string) *ServiceConfig {
+	svc := BuildUDPForwardService(name, listenPort, targets, strategy)
+	svc.Listener = &ListenerConfig{
+		Type: "ftcp",
+		Metadata: map[string]any{
+			"ttl": "60s", // 与入口 UDP 服务一致：会话空闲 60 秒才回收，否则出口换源端口，游戏服会当成新连接
+		},
+	}
+	return svc
+}
+
 // BuildFullForwardService 构建 TCP+UDP 全流量转发服务配置
 // 同时监听 TCP 和 UDP，适用于需要双协议支持的场景（如游戏服务器、DNS 等）
 func BuildFullForwardService(name string, listenPort int, targets []string, strategy string) []*ServiceConfig {

@@ -61,9 +61,11 @@ const (
 )
 
 var (
-	ruleServicePattern = regexp.MustCompile(`^rule-(\d+)(?:-tcp|-udp)?$`)
-	tunnelRelayPattern = regexp.MustCompile(`^relay-tunnel-(\d+)(?:-hop-\d+)?$`)
-	tunnelChainPattern = regexp.MustCompile(`^tunnel-(\d+)-chain$`)
+	ruleServicePattern        = regexp.MustCompile(`^rule-(\d+)(?:-tcp|-udp)?$`)
+	ruleFakeTCPServicePattern = regexp.MustCompile(`^rule-(\d+)-ftcp$`)
+	ruleFakeTCPChainPattern   = regexp.MustCompile(`^rule-(\d+)-ftcp-chain$`)
+	tunnelRelayPattern        = regexp.MustCompile(`^relay-tunnel-(\d+)(?:-hop-\d+)?$`)
+	tunnelChainPattern        = regexp.MustCompile(`^tunnel-(\d+)-chain$`)
 )
 
 // NewWatchdog 创建看门狗，复用调用方的 RuleService（及其内部的 TunnelService）
@@ -117,7 +119,7 @@ func newNodeSnapshot(node *model.GostNode, client *gost.Client, cfg *gost.GostCo
 }
 
 func (s *nodeSnapshot) has(kind objectKind, name string) bool {
-	if kind == kindTunnelChain {
+	if kind.isChain() {
 		return s.chains[name]
 	}
 	_, ok := s.services[name]
@@ -358,7 +360,7 @@ func (w *Watchdog) Reconcile(nodes []model.GostNode, snapshots map[uint]*nodeSna
 	}
 
 	// 1. 先清理规则残留：已删除规则的服务可能正占着新规则要用的端口
-	cleaned := w.cleanupStale(state, snapshots, kindRuleService)
+	cleaned := w.cleanupStale(state, snapshots, kindRuleService, kindRuleFakeTCPService)
 
 	// 2. 再恢复隧道：规则服务通过名称引用隧道的 chain
 	for _, id := range sortedIDs(state.tunnels) {
@@ -374,9 +376,9 @@ func (w *Watchdog) Reconcile(nodes []model.GostNode, snapshots map[uint]*nodeSna
 		}
 	}
 
-	// 4. 最后清理隧道残留。chain 必须在第 3 步处理完引用它的规则之后才能删，
+	// 4. 最后清理隧道残留与规则的伪 TCP chain。chain 必须在第 3 步处理完引用它的规则之后才能删，
 	//    否则这些规则的流量会在两步之间绕过隧道直连目标。
-	for key := range w.cleanupStale(state, snapshots, kindTunnelRelay, kindTunnelChain) {
+	for key := range w.cleanupStale(state, snapshots, kindTunnelRelay, kindTunnelChain, kindRuleFakeTCPChain) {
 		cleaned[key] = true
 	}
 
@@ -408,7 +410,11 @@ const (
 	kindRuleService objectKind = iota
 	kindTunnelRelay
 	kindTunnelChain
+	kindRuleFakeTCPService // 规则在隧道出口节点上的伪 TCP 服务（UDP 伪TCP直通）
+	kindRuleFakeTCPChain   // 规则在入口节点上指向伪 TCP 服务的 chain
 )
+
+func (k objectKind) isChain() bool { return k == kindTunnelChain || k == kindRuleFakeTCPChain }
 
 // panelObject 节点上一个由面板命名的对象
 type panelObject struct {
@@ -417,7 +423,9 @@ type panelObject struct {
 	name string
 }
 
-func (o panelObject) isRule() bool { return o.kind == kindRuleService }
+func (o panelObject) isRule() bool {
+	return o.kind == kindRuleService || o.kind == kindRuleFakeTCPService || o.kind == kindRuleFakeTCPChain
+}
 
 // cleanupStale 删除节点上指定类型中多余的面板对象，返回本轮涉及的清理退避键
 func (w *Watchdog) cleanupStale(state *desiredState, snapshots map[uint]*nodeSnapshot, kinds ...objectKind) map[string]bool {
@@ -450,6 +458,8 @@ func panelObjects(snap *nodeSnapshot) []panelObject {
 	for _, name := range sortedKeys(snap.services) {
 		if id, ok := matchID(ruleServicePattern, name); ok {
 			objs = append(objs, panelObject{kind: kindRuleService, id: id, name: name})
+		} else if id, ok := matchID(ruleFakeTCPServicePattern, name); ok {
+			objs = append(objs, panelObject{kind: kindRuleFakeTCPService, id: id, name: name})
 		} else if id, ok := matchID(tunnelRelayPattern, name); ok {
 			objs = append(objs, panelObject{kind: kindTunnelRelay, id: id, name: name})
 		}
@@ -457,6 +467,8 @@ func panelObjects(snap *nodeSnapshot) []panelObject {
 	for _, name := range sortedKeys(snap.chains) {
 		if id, ok := matchID(tunnelChainPattern, name); ok {
 			objs = append(objs, panelObject{kind: kindTunnelChain, id: id, name: name})
+		} else if id, ok := matchID(ruleFakeTCPChainPattern, name); ok {
+			objs = append(objs, panelObject{kind: kindRuleFakeTCPChain, id: id, name: name})
 		}
 	}
 	return objs
@@ -474,7 +486,7 @@ func (w *Watchdog) isStale(obj panelObject, nodeID uint, state *desiredState) bo
 		if rule == nil {
 			return false
 		}
-		return ruleObjectStale(rule, state.tunnels[derefUint(rule.TunnelID)], nodeID)
+		return ruleObjectStale(rule, state.tunnels[derefUint(rule.TunnelID)], obj.kind, nodeID)
 	}
 
 	if state.deletedTunnels[obj.id] {
@@ -487,10 +499,21 @@ func (w *Watchdog) isStale(obj panelObject, nodeID uint, state *desiredState) bo
 	return tunnelObjectStale(tunnel, obj, nodeID)
 }
 
-// ruleObjectStale 判断规则服务在该节点上是否多余（规则本身存在时）
-func ruleObjectStale(rule *model.GostRule, tunnel *model.GostTunnel, nodeID uint) bool {
+// ruleObjectStale 判断规则的对象在该节点上是否多余（规则本身存在时）
+func ruleObjectStale(rule *model.GostRule, tunnel *model.GostTunnel, kind objectKind, nodeID uint) bool {
 	if !rule.Status.WantsRunning() {
 		return true
+	}
+	if kind == kindRuleFakeTCPService || kind == kindRuleFakeTCPChain {
+		// 关掉 UDP 伪TCP直通后两样都不再需要；伪 TCP 服务应在当前隧道的最后一跳上
+		// （切到出口不同的备选隧道后，旧出口上的那个就是残留）
+		if !usesFakeTCP(rule) {
+			return true
+		}
+		if kind == kindRuleFakeTCPService {
+			exitID := fakeTCPExitNodeID(tunnel)
+			return exitID != 0 && exitID != nodeID
+		}
 	}
 	entryID := ruleEntryNodeID(rule, tunnel)
 	return entryID != 0 && entryID != nodeID
@@ -542,7 +565,7 @@ func (w *Watchdog) cleanupObject(obj panelObject, node *model.GostNode) {
 	}
 	// 还有服务引用这条 chain 时不能删，否则它们的流量会绕过隧道直连目标。
 	// 正常情况下引用它的规则已在第 3 步被切走或暂停；走到这里说明节点与数据库不一致，下一轮再看
-	if obj.kind == kindTunnelChain && snap.chainInUse(obj.name) {
+	if obj.kind.isChain() && snap.chainInUse(obj.name) {
 		// 可能是与面板无关的服务在用它，会一直存在：按退避复查，只提示一次
 		if w.backoff.fail(key, w.now()) == 1 {
 			logger.Warnf("[Watchdog] 节点 %s 上的 %s 仍被服务引用，暂不清理", node.Name, obj.name)
@@ -550,7 +573,7 @@ func (w *Watchdog) cleanupObject(obj panelObject, node *model.GostNode) {
 		return
 	}
 
-	if obj.kind == kindTunnelChain {
+	if obj.kind.isChain() {
 		err = snap.client.DeleteChain(obj.name)
 	} else {
 		err = snap.client.DeleteService(obj.name)
@@ -578,7 +601,7 @@ func (w *Watchdog) recheckStale(obj panelObject, nodeID uint) (resourceType, res
 			deleted := stderrors.Is(err, gorm.ErrRecordNotFound) && w.isDeleted(obj)
 			return resourceType, fmt.Sprintf("#%d（已删除）", obj.id), deleted
 		}
-		return resourceType, rule.Name, ruleObjectStale(rule, rule.Tunnel, nodeID)
+		return resourceType, rule.Name, ruleObjectStale(rule, rule.Tunnel, obj.kind, nodeID)
 	}
 
 	resourceType = model.ResourceTypeTunnel
@@ -783,7 +806,7 @@ func (w *Watchdog) reconcileRule(r *model.GostRule, state *desiredState, snapsho
 	}
 
 	needsRestore, observed := ruleDrift(r, expectedRuleChain(r, tunnel), snap)
-	if !needsRestore {
+	if !needsRestore && !fakeTCPServiceMissing(r, snapshots[fakeTCPExitNodeID(tunnel)]) {
 		w.backoff.reset(restoreKey)
 		w.setRuleStatus(r, observed, "入口节点上的服务已就绪")
 		return
@@ -821,18 +844,35 @@ func (w *Watchdog) handleRule(id uint, state *desiredState) {
 	}
 
 	chainID := expectedRuleChain(rule, rule.Tunnel)
+	var exitSnap *nodeSnapshot
+	if usesFakeTCP(rule) {
+		exitID := fakeTCPExitNodeID(rule.Tunnel)
+		exitSnap = freshSnapshots([]uint{exitID}, state.nodes)[exitID]
+	}
 	needsRestore, observed := ruleDrift(rule, chainID, snap)
-	if !needsRestore {
+	if !needsRestore && !fakeTCPServiceMissing(rule, exitSnap) {
 		w.backoff.reset(ruleRestoreKey(id))
 		w.setRuleStatus(rule, observed, "入口节点上的服务已就绪")
 		return
 	}
 
-	restored, err := w.ruleService.restoreRuleServices(snap.client, rule, chainID, snap)
+	// 伪 TCP 链路先于子服务恢复：UDP 子服务挂在它上面。它没能恢复时 TCP 子服务照常恢复，
+	// UDP 子服务则因 chain 不在而暂不下发，不会绕过出口直连目标
+	var restored []string
+	if usesFakeTCP(rule) {
+		restored, err = w.ruleService.restoreFakeTCPPath(rule, snap, exitSnap)
+	}
+	names, svcErr := w.ruleService.restoreRuleServices(snap.client, rule, chainID, snap)
+	for _, name := range names {
+		restored = append(restored, fmt.Sprintf("%s: %s", snap.node.Name, name))
+	}
+	if err == nil {
+		err = svcErr
+	}
 	if len(restored) > 0 {
-		logger.Infof("[Watchdog] 已恢复规则 %d (%s): 节点 %s 上的 %s", rule.ID, rule.Name, snap.node.Name, strings.Join(restored, ", "))
+		logger.Infof("[Watchdog] 已恢复规则 %d (%s): %s", rule.ID, rule.Name, strings.Join(restored, ", "))
 		w.record(model.ActionRecover, model.ResourceTypeRule, rule.ID,
-			fmt.Sprintf("看门狗自动恢复规则 %s：在节点 %s 上重新下发 %s", rule.Name, snap.node.Name, strings.Join(restored, "、")))
+			fmt.Sprintf("看门狗自动恢复规则 %s：重新下发 %s", rule.Name, strings.Join(restored, "、")))
 	}
 	if err != nil {
 		failures := w.backoff.fail(ruleRestoreKey(id), w.now())
@@ -952,10 +992,16 @@ func ruleDrift(r *model.GostRule, chain string, snap *nodeSnapshot) (needsRestor
 	if _, ok := snap.services[base]; ok {
 		return true, ""
 	}
-	for _, name := range []string{base + "-tcp", base + "-udp"} {
-		if !snap.serviceHealthy(name, chain) {
+	udpChain := chain
+	if usesFakeTCP(r) {
+		// UDP 子服务挂在规则自己的伪 TCP 链路上，这条 chain 本身也得在
+		udpChain = ruleFakeTCPChainName(r.ID)
+		if !snap.chains[udpChain] {
 			return true, ""
 		}
+	}
+	if !snap.serviceHealthy(base+"-tcp", chain) || !snap.serviceHealthy(base+"-udp", udpChain) {
+		return true, ""
 	}
 	return false, model.RuleStatusRunning
 }

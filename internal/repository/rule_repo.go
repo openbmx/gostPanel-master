@@ -43,6 +43,7 @@ func (r *RuleRepository) UpdateConfig(rule *model.GostRule) error {
 		Select(
 			"name", "listen_port", "targets", "strategy", "enable_tls", "remark",
 			"node_id", "tunnel_id", "primary_tunnel_id", "backup_tunnel_ids", "status",
+			"udp_fake_tcp", "udp_fake_tcp_port",
 		).
 		Updates(rule).Error
 }

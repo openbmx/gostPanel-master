@@ -519,11 +519,20 @@ func (s *TunnelService) suspendTunnelRules(tunnel *model.GostTunnel, client *gos
 		if rule.ServiceID != "" && rule.ServiceID != names[0] {
 			names = append(names, rule.ServiceID)
 		}
+		removedAll := true
 		for _, base := range names {
 			for _, name := range []string{base, base + "-tcp", base + "-udp"} {
 				if err = client.DeleteService(name); err != nil {
+					removedAll = false
 					logger.Warnf("暂停规则 %s 时删除服务 %s 失败: %v", rule.Name, name, err)
 				}
+			}
+		}
+		// 伪 TCP 链路一并撤掉：停用期间隧道可能被改成别的出口节点，恢复时看门狗按当时的出口重建。
+		// UDP 子服务没删干净时不能动它，否则留下的子服务会直连目标
+		if removedAll && usesFakeTCP(rule) {
+			if err = removeRuleFakeTCPPath(client, rule, tunnel, s.nodeRepo); err != nil {
+				logger.Warnf("暂停规则 %s 时删除伪 TCP 链路失败: %v", rule.Name, err)
 			}
 		}
 		_ = s.ruleRepo.UpdateStatus(rule.ID, model.RuleStatusError)

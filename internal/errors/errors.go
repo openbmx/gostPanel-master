@@ -112,6 +112,8 @@ var (
 	ErrTunnelChainCreateFailed = New(10218, "创建隧道Chain失败", http.StatusInternalServerError)
 	// ErrTunnelObserverCreateFailed 创建观察器失败
 	ErrTunnelObserverCreateFailed = New(10213, "创建观察器失败", http.StatusInternalServerError)
+	// ErrTunnelHopProtocol 跳点协议不受支持或不能用在该位置
+	ErrTunnelHopProtocol = New(10219, "跳点协议不可用", http.StatusBadRequest)
 )
 
 // ==================== 认证相关错误 (103xx) ====================

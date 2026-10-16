@@ -10,22 +10,6 @@ import (
 	"gorm.io/gorm"
 )
 
-var supportedTunnelProtocols = map[string]struct{}{
-	"tcp":  {},
-	"udp":  {},
-	"tls":  {},
-	"mtls": {},
-	"ws":   {},
-	"mws":  {},
-	"wss":  {},
-	"mwss": {},
-	"h2":   {},
-	"grpc": {},
-	"quic": {},
-	"kcp":  {},
-	"ssh":  {},
-}
-
 func (s *TunnelService) normalizeCreateTunnelHops(req *dto.CreateTunnelReq) ([]model.TunnelHop, error) {
 	if len(req.Hops) > 0 {
 		return s.normalizeTunnelHops(req.EntryNodeID, req.Hops)
@@ -81,12 +65,12 @@ func (s *TunnelService) normalizeTunnelHops(entryNodeID uint, reqHops []dto.Tunn
 
 	seen := map[uint]struct{}{entryNodeID: {}}
 	hops := make([]model.TunnelHop, 0, len(reqHops))
-	for _, reqHop := range reqHops {
+	for i, reqHop := range reqHops {
 		if reqHop.NodeID == 0 || reqHop.RelayPort < 1 || reqHop.RelayPort > 65535 {
 			return nil, errors.ErrBadRequest
 		}
-		if _, ok := supportedTunnelProtocols[reqHop.Protocol]; !ok {
-			return nil, errors.ErrBadRequest
+		if err := validateTunnelHopProtocol(i, reqHop.Protocol); err != nil {
+			return nil, err
 		}
 		if _, ok := seen[reqHop.NodeID]; ok {
 			return nil, errors.ErrBadRequest

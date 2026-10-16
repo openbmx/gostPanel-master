@@ -136,7 +136,8 @@ type ConnectorConfig struct {
 
 // DialerConfig 拨号器配置
 type DialerConfig struct {
-	Type string `json:"type"`
+	Type     string         `json:"type"`
+	Metadata map[string]any `json:"metadata,omitempty"` // 元数据配置
 }
 
 // LimiterConfig 流量速率限制器配置

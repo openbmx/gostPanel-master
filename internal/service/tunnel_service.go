@@ -238,6 +238,11 @@ func (s *TunnelService) Start(id uint, userID uint, username string, ip, userAge
 	if tunnel.Status == model.TunnelStatusRunning {
 		return nil
 	}
+	// 编辑时已经校验过；这里拦住旧版本存下的不可用配置（比如第 2 跳用了 KCP），
+	// 否则启动“成功”了流量却不通
+	if err = validateTunnelHopProtocols(tunnel.EffectiveHops()); err != nil {
+		return err
+	}
 
 	entryNode, err := s.nodeRepo.FindByID(tunnel.EntryNodeID)
 	if err != nil {

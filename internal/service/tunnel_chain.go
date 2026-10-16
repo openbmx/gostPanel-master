@@ -42,6 +42,7 @@ func buildTunnelRuntimePlan(tunnel *model.GostTunnel, nodes map[uint]*model.Gost
 		if isFinalHop {
 			relayName = fmt.Sprintf("relay-tunnel-%d", tunnel.ID)
 		}
+		transport := lookupTunnelTransport(hop.Protocol)
 
 		relays = append(relays, tunnelRelayPlan{
 			NodeID: hop.NodeID,
@@ -52,7 +53,8 @@ func buildTunnelRuntimePlan(tunnel *model.GostTunnel, nodes map[uint]*model.Gost
 					Type: "relay",
 				},
 				Listener: &gost.ListenerConfig{
-					Type: hop.Protocol,
+					Type:     transport.gostType,
+					Metadata: transportMetadata(transport),
 				},
 			},
 			EnableStats: isFinalHop,
@@ -68,7 +70,8 @@ func buildTunnelRuntimePlan(tunnel *model.GostTunnel, nodes map[uint]*model.Gost
 						Type: "relay",
 					},
 					Dialer: &gost.DialerConfig{
-						Type: hop.Protocol,
+						Type:     transport.gostType,
+						Metadata: transportMetadata(transport),
 					},
 				},
 			},

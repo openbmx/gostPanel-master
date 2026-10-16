@@ -84,7 +84,7 @@
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑隧道' : '添加隧道'"
-      width="760px"
+      width="880px"
       :close-on-click-modal="false"
     >
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
@@ -125,10 +125,18 @@
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column label="协议" width="150">
-              <template #default="{ row }">
+            <el-table-column label="协议" width="200">
+              <template #default="{ row, $index }">
                 <el-select v-model="row.protocol" style="width: 100%">
-                  <el-option v-for="item in protocolOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  <el-option-group v-for="group in protocolGroups" :key="group.label" :label="group.label">
+                    <el-option
+                      v-for="item in group.options"
+                      :key="item.value"
+                      :label="item.label"
+                      :value="item.value"
+                      :disabled="item.firstHopOnly && $index > 0"
+                    />
+                  </el-option-group>
                 </el-select>
               </template>
             </el-table-column>
@@ -149,6 +157,7 @@
             <el-button type="primary" link :icon="Plus" @click="addHop">添加跳点</el-button>
           </div>
           <div class="form-hint">最后一个跳点就是出口节点。每个跳点会在对应节点上创建 Relay 服务。</div>
+          <div class="form-hint">QUIC、KCP 基于 UDP，只能用于第 1 跳。</div>
         </el-form-item>
 
         <el-form-item label="备注" prop="remark">
@@ -188,20 +197,38 @@ const editId = ref(null)
 const submitLoading = ref(false)
 const formRef = ref(null)
 
-const protocolOptions = [
-  { label: 'WebSocket (ws)', value: 'ws' },
-  { label: 'WebSocket Secure (wss)', value: 'wss' },
-  { label: 'Multiplex WebSocket (mws)', value: 'mws' },
-  { label: 'Multiplex WSS (mwss)', value: 'mwss' },
-  { label: 'HTTP/2 (h2)', value: 'h2' },
-  { label: 'gRPC', value: 'grpc' },
-  { label: 'QUIC', value: 'quic' },
-  { label: 'KCP', value: 'kcp' },
-  { label: 'TLS', value: 'tls' },
-  { label: 'Multiplex TLS (mtls)', value: 'mtls' },
-  { label: 'SSH', value: 'ssh' },
-  { label: 'TCP (tcp)', value: 'tcp' }
+// 后续跳点要经前一跳的 relay 用 TCP 转接过去，基于 UDP 的通道接不上，所以它们只能用于第 1 跳
+// （与后端 tunnelTransports 保持一致）
+const protocolGroups = [
+  {
+    label: '可用于任意跳',
+    options: [
+      { label: 'WebSocket (ws)', value: 'ws' },
+      { label: 'WebSocket Secure (wss)', value: 'wss' },
+      { label: 'Multiplex WebSocket (mws)', value: 'mws' },
+      { label: 'Multiplex WSS (mwss)', value: 'mwss' },
+      { label: 'HTTP/2 (h2)', value: 'h2' },
+      { label: 'HTTP/2 明文 (h2c)', value: 'h2c' },
+      { label: 'gRPC', value: 'grpc' },
+      { label: 'TLS', value: 'tls' },
+      { label: 'Multiplex TLS (mtls)', value: 'mtls' },
+      { label: 'SSH', value: 'ssh' },
+      { label: 'TCP (tcp)', value: 'tcp' },
+      { label: 'Multiplex TCP (mtcp)', value: 'mtcp' },
+      { label: 'HTTP 伪装 (ohttp)', value: 'ohttp' },
+      { label: 'PHT 纯 HTTP (pht)', value: 'pht' },
+      { label: 'PHT over TLS (phts)', value: 'phts' }
+    ]
+  },
+  {
+    label: '仅限第 1 跳',
+    options: [
+      { label: 'KCP', value: 'kcp', firstHopOnly: true },
+      { label: 'QUIC', value: 'quic', firstHopOnly: true }
+    ]
+  }
 ]
+const protocolOptionMap = Object.fromEntries(protocolGroups.flatMap(group => group.options).map(item => [item.value, item]))
 
 const form = reactive({
   name: '',
@@ -216,7 +243,7 @@ const validateHops = (rule, value, callback) => {
     return
   }
   const used = new Set([form.entry_node_id])
-  for (const hop of form.hops) {
+  for (const [index, hop] of form.hops.entries()) {
     if (!hop.node_id) {
       callback(new Error('请选择跳点节点'))
       return
@@ -228,6 +255,16 @@ const validateHops = (rule, value, callback) => {
     used.add(hop.node_id)
     if (!hop.protocol || !hop.relay_port) {
       callback(new Error('请填写跳点协议和端口'))
+      return
+    }
+    // 旧隧道可能存着已下线的协议（如 udp），调整顺序也可能把仅限第 1 跳的协议挪到后面
+    const option = protocolOptionMap[hop.protocol]
+    if (!option) {
+      callback(new Error(`第 ${index + 1} 跳的协议 ${hop.protocol} 已不再支持，请重新选择`))
+      return
+    }
+    if (option.firstHopOnly && index > 0) {
+      callback(new Error(`${option.label} 只能用于第 1 跳，第 ${index + 1} 跳请换用其他协议`))
       return
     }
   }
@@ -267,7 +304,7 @@ const getTunnelHops = (tunnel) => {
 const getTunnelPath = (tunnel) => {
   const names = [tunnel.entry_node?.name || getNodeName(tunnel.entry_node_id)]
   for (const hop of getTunnelHops(tunnel)) {
-    names.push(getNodeName(hop.node_id))
+    names.push(`${getNodeName(hop.node_id)} (${hop.protocol || tunnel.protocol})`)
   }
   return names.join(' -> ')
 }
